@@ -292,7 +292,7 @@
             const input = document.createElement('input');
             input.type = 'text';
             input.className = 'active-inline-input';
-            input.value = span.text;
+            input.value = span.text.trim();
             input.style.left = boxElement.style.left;
             input.style.top = boxElement.style.top;
             input.style.minWidth = `${Math.max(parseFloat(boxElement.style.width) + 10, 80)}px`;
@@ -385,7 +385,19 @@
                 return;
             }
 
-            liveStatusMsg.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Patching Content Stream...';
+            // Guard: If editing existing text and nothing changed, abort silently
+            if (!activeEditTarget.isNew && val.trim() === activeEditTarget.span.text.trim()) {
+                closeActiveInput();
+                return;
+            }
+
+            // Guard: If clicking blank area and leaving placeholder unchanged, abort silently
+            if (activeEditTarget.isNew && (val === 'New Text' || val.trim() === '')) {
+                closeActiveInput();
+                return;
+            }
+
+            liveStatusMsg.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Applying Clean Vector Edit...';
             lucide.createIcons();
 
             let editPayload = null;
@@ -396,7 +408,7 @@
                     page_index: currentPageIndex,
                     x: activeEditTarget.x,
                     y: activeEditTarget.y,
-                    newText: val,
+                    newText: val.trim(),
                     size: activeEditTarget.size,
                     color: activeEditTarget.color
                 };
@@ -406,10 +418,11 @@
                     page_index: currentPageIndex,
                     bbox: activeEditTarget.span.bbox,
                     oldText: activeEditTarget.span.text,
-                    newText: val,
+                    newText: val.trim(),
                     size: activeEditTarget.size,
                     color: activeEditTarget.color,
-                    font: activeEditTarget.span.font
+                    font: activeEditTarget.span.font,
+                    flags: activeEditTarget.span.flags || 0
                 };
             }
 

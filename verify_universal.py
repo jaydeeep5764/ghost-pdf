@@ -48,9 +48,18 @@ def test_file(path, search_text, replace_text, out_path):
     print(f"[*] {os.path.basename(path)}: Edit '{search_text}' -> '{replace_text}': {'PASS' if success else 'FAIL'}")
     return success
 
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
 print("=== RUNNING UNIVERSAL ENGINE VERIFICATION TEST ===")
-t1 = test_file("pdf_engine/sample_invoice.pdf", "$500.00", "$999.00", "pdf_engine/test_uni_invoice.pdf")
-t2 = test_file(r"C:\Users\Admin\Downloads\compare\Ajay_Sharma_Resume.pdf", "Ajay Sharma", "Jaydeep Sapatale", "pdf_engine/test_uni_resume.pdf")
-t3 = test_file(r"C:\Users\Admin\Downloads\compare\ANN_08 (1).pdf", "EXPERIMENT_NO : 08", "EXPERIMENT_NO : 10", "pdf_engine/test_uni_ann.pdf")
+sample_pdf = os.path.join(SCRIPT_DIR, "sample_invoice.pdf")
+out_invoice = os.path.join(SCRIPT_DIR, "test_uni_invoice.pdf")
+t1 = test_file(sample_pdf, "$500.00", "$999.00", out_invoice)
+
+cs08_pdf = r"C:\Users\Admin\Downloads\compare\CS_08.pdf"
+out_cs08 = os.path.join(SCRIPT_DIR, "test_uni_cs08.pdf")
+t2 = test_file(cs08_pdf, "Experiment No.08", "Experiment No.10", out_cs08)
+
+out_cs08_bool = os.path.join(SCRIPT_DIR, "test_uni_cs08_bool.pdf")
+t3 = test_file(cs08_pdf, "True", "false", out_cs08_bool)
 
 print(f"\nSummary: {sum([t1, t2, t3])}/3 Tests Passed!")
