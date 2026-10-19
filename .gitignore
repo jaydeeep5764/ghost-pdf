@@ -1,0 +1,35 @@
+# Python cache & build
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Virtual Environments
+venv/
+.venv/
+env/
+
+# IDE & Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test outputs & temporary generated files
+test_*.pdf
+test_*.png
+edited_*.pdf
+edited_*.png
+fixed_*.pdf
+fixed_*.png
+true_stream_edit.pdf
+true_stream_edit.png
+cs08_perfect_stream.pdf
+lowlevel_out.pdf
+lowlevel_patched.pdf
+
+# OS artifacts
+.DS_Store
+Thumbs.db

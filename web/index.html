@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GhostPDF Studio - Low-Level Stream Editor</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        .page-container {
+            position: relative;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+            user-select: none;
+        }
+        .text-overlay-box {
+            position: absolute;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: background 0.1s ease, outline 0.1s ease;
+        }
+        .text-overlay-box:hover {
+            background-color: rgba(59, 130, 246, 0.2);
+            outline: 2px solid #2563EB;
+        }
+        .active-inline-input {
+            position: absolute;
+            border: 2px solid #2563EB;
+            background: rgba(255, 255, 255, 0.98);
+            outline: none;
+            padding: 0 4px;
+            border-radius: 4px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            z-index: 50;
+        }
+        .floating-toolbar {
+            position: absolute;
+            background: #0F172A;
+            color: white;
+            border-radius: 8px;
+            padding: 6px 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 12px 24px rgba(0,0,0,0.3);
+            z-index: 60;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 h-screen flex flex-col font-sans overflow-hidden">
+
+    <!-- Top Navigation Header -->
+    <header class="bg-white border-b border-slate-200 px-6 py-3 flex items-center justify-between shadow-sm z-30">
+        <div class="flex items-center gap-4">
+            <div class="flex items-center gap-2">
+                <div class="bg-blue-600 text-white p-2 rounded-lg font-bold flex items-center justify-center">
+                    <i data-lucide="zap" class="w-5 h-5"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg leading-tight text-slate-900">GhostPDF Studio</h1>
+                    <span class="text-xs font-semibold px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">Low-Level Byte Stream Engine</span>
+                </div>
+            </div>
+
+            <div class="h-6 w-px bg-slate-300 mx-2"></div>
+
+            <!-- Upload Custom File -->
+            <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-md text-sm font-medium transition">
+                <i data-lucide="upload" class="w-4 h-4"></i>
+                <span>Open Custom PDF</span>
+                <input type="file" id="pdfFileInput" accept="application/pdf" class="hidden">
+            </label>
+        </div>
+
+        <!-- Center: Pagination & Zoom -->
+        <div class="flex items-center gap-3 bg-slate-100 px-3 py-1 rounded-lg text-sm">
+            <button id="prevPageBtn" class="p-1 hover:bg-white rounded transition text-slate-600 hover:text-slate-900 disabled:opacity-30">
+                <i data-lucide="chevron-left" class="w-4 h-4"></i>
+            </button>
+            <span id="pageIndicator" class="font-medium text-slate-700">Page 1 of 1</span>
+            <button id="nextPageBtn" class="p-1 hover:bg-white rounded transition text-slate-600 hover:text-slate-900 disabled:opacity-30">
+                <i data-lucide="chevron-right" class="w-4 h-4"></i>
+            </button>
+
+            <div class="h-4 w-px bg-slate-300 mx-1"></div>
+
+            <button id="zoomOutBtn" class="p-1 hover:bg-white rounded transition text-slate-600">
+                <i data-lucide="minus" class="w-4 h-4"></i>
+            </button>
+            <span id="zoomLabel" class="w-12 text-center font-medium">100%</span>
+            <button id="zoomInBtn" class="p-1 hover:bg-white rounded transition text-slate-600">
+                <i data-lucide="plus" class="w-4 h-4"></i>
+            </button>
+        </div>
+
+        <!-- Right: Actions -->
+        <div class="flex items-center gap-3">
+            <button id="downloadPdfBtn" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold shadow-sm transition flex items-center gap-2">
+                <i data-lucide="download" class="w-4 h-4"></i>
+                <span>Download Clean PDF</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- Sub-bar: Instructions & Live Status -->
+    <div class="bg-blue-50 border-b border-blue-100 px-6 py-2 text-xs text-blue-900 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+            <i data-lucide="info" class="w-4 h-4 text-blue-600"></i>
+            <span><strong>Click on any text</strong> to edit. Press <strong>Enter</strong> or click <strong>Apply</strong> to immediately rewrite the PostScript byte stream!</span>
+        </div>
+        <div id="liveStatusMsg" class="font-semibold text-emerald-700 flex items-center gap-1.5">
+            <i data-lucide="check-circle" class="w-3.5 h-3.5"></i>
+            <span>Ready for Click-to-Edit</span>
+        </div>
+    </div>
+
+    <!-- Main Workspace Viewport -->
+    <main id="viewportContainer" class="flex-1 overflow-auto p-8 flex justify-center items-start bg-slate-200">
+        <div id="pageWrapper" class="page-container relative bg-white transition-transform origin-top">
+            <!-- Background Rendered Page Image -->
+            <img id="pdfPageImage" src="" alt="PDF Page" class="block w-full h-auto select-none pointer-events-none" draggable="false">
+
+            <!-- Interactive Click-to-Edit Layer -->
+            <div id="interactiveOverlay" class="absolute inset-0 cursor-text"></div>
+        </div>
+    </main>
+
+    <!-- Floating Format Bar (Appears on Active Selection) -->
+    <div id="floatingToolbar" class="floating-toolbar hidden">
+        <span class="font-medium text-slate-400 text-xs">Size:</span>
+        <button id="sizeMinusBtn" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 rounded font-bold">-</button>
+        <span id="fontSizeDisplay" class="font-mono text-xs text-emerald-400">12pt</span>
+        <button id="sizePlusBtn" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 rounded font-bold">+</button>
+
+        <div class="h-4 w-px bg-slate-700 mx-1"></div>
+
+        <input type="color" id="colorPicker" value="#000000" class="w-6 h-6 bg-transparent cursor-pointer rounded border-0">
+
+        <div class="h-4 w-px bg-slate-700 mx-1"></div>
+
+        <button id="deleteTextBtn" class="px-2 py-1 bg-rose-600 hover:bg-rose-700 rounded text-xs flex items-center gap-1 transition" title="Clean Whiteout">
+            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+            <span>Erase</span>
+        </button>
+
+        <button id="saveEditBtn" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 rounded text-xs font-semibold flex items-center gap-1 transition">
+            <i data-lucide="check" class="w-3.5 h-3.5"></i>
+            <span>Apply</span>
+        </button>
+    </div>
+
+    <script>
+        let currentPageIndex = 0;
+        let totalPages = 1;
+        let originalPageWidth = 595;
+        let originalPageHeight = 842;
+        let zoomLevel = 1.0;
+        let pageSpans = [];
+
+        let activeInput = null;
+        let activeEditTarget = null;
+
+        const pdfPageImage = document.getElementById('pdfPageImage');
+        const interactiveOverlay = document.getElementById('interactiveOverlay');
+        const pageWrapper = document.getElementById('pageWrapper');
+        const floatingToolbar = document.getElementById('floatingToolbar');
+        const pageIndicator = document.getElementById('pageIndicator');
+        const prevPageBtn = document.getElementById('prevPageBtn');
+        const nextPageBtn = document.getElementById('nextPageBtn');
+        const zoomLabel = document.getElementById('zoomLabel');
+        const zoomInBtn = document.getElementById('zoomInBtn');
+        const zoomOutBtn = document.getElementById('zoomOutBtn');
+        const pdfFileInput = document.getElementById('pdfFileInput');
+        const downloadPdfBtn = document.getElementById('downloadPdfBtn');
+        const liveStatusMsg = document.getElementById('liveStatusMsg');
+
+        const fontSizeDisplay = document.getElementById('fontSizeDisplay');
+        const sizeMinusBtn = document.getElementById('sizeMinusBtn');
+        const sizePlusBtn = document.getElementById('sizePlusBtn');
+        const colorPicker = document.getElementById('colorPicker');
+        const deleteTextBtn = document.getElementById('deleteTextBtn');
+        const saveEditBtn = document.getElementById('saveEditBtn');
+
+        lucide.createIcons();
+
+        async function loadPage(pageIdx = 0) {
+            try {
+                const res = await fetch(`/api/page?num=${pageIdx}`);
+                const data = await res.json();
+                renderPageData(data);
+            } catch (err) {
+                const res = await fetch('/api/sample');
+                const data = await res.json();
+                renderPageData(data);
+            }
+        }
+
+        function renderPageData(data) {
+            currentPageIndex = data.page_index;
+            totalPages = data.total_pages;
+            originalPageWidth = data.width;
+            originalPageHeight = data.height;
+            pageSpans = data.spans;
+
+            pageIndicator.innerText = `Page ${currentPageIndex + 1} of ${totalPages}`;
+            prevPageBtn.disabled = (currentPageIndex <= 0);
+            nextPageBtn.disabled = (currentPageIndex >= totalPages - 1);
+
+            pdfPageImage.src = data.image;
+            pdfPageImage.onload = () => {
+                rebuildInteractiveOverlay();
+            };
+        }
+
+        function rebuildInteractiveOverlay() {
+            interactiveOverlay.innerHTML = '';
+            closeActiveInput();
+
+            const renderWidth = pdfPageImage.clientWidth;
+            const renderHeight = pdfPageImage.clientHeight;
+            const scaleX = renderWidth / originalPageWidth;
+            const scaleY = renderHeight / originalPageHeight;
+
+            pageSpans.forEach(span => {
+                const [x0, y0, x1, y1] = span.bbox;
+                const left = x0 * scaleX;
+                const top = y0 * scaleY;
+                const width = Math.max((x1 - x0) * scaleX, 10);
+                const height = Math.max((y1 - y0) * scaleY, 14);
+
+                const box = document.createElement('div');
+                box.className = 'text-overlay-box';
+                box.style.left = `${left}px`;
+                box.style.top = `${top}px`;
+                box.style.width = `${width}px`;
+                box.style.height = `${height}px`;
+                box.title = `Click to edit: "${span.text}"`;
+
+                box.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    openInlineEditor(span, box);
+                });
+
+                interactiveOverlay.appendChild(box);
+            });
+        }
+
+        // CLICK ON BLANK AREA -> Add New Text
+        interactiveOverlay.addEventListener('click', (e) => {
+            if (activeInput) {
+                commitActiveInput();
+                return;
+            }
+
+            const rect = interactiveOverlay.getBoundingClientRect();
+            const clickX = e.clientX - rect.left;
+            const clickY = e.clientY - rect.top;
+
+            const scaleX = pdfPageImage.clientWidth / originalPageWidth;
+            const scaleY = pdfPageImage.clientHeight / originalPageHeight;
+
+            const pdfX = clickX / scaleX;
+            const pdfY = clickY / scaleY;
+
+            const newObj = {
+                isNew: true,
+                x: pdfX,
+                y: pdfY,
+                newText: 'New Text',
+                size: 12.0,
+                color: '#1E293B',
+                font: 'helv'
+            };
+
+            openInlineEditorForNewText(newObj, clickX, clickY);
+        });
+
+        function openInlineEditor(span, boxElement) {
+            closeActiveInput();
+
+            activeEditTarget = {
+                isNew: false,
+                span: span,
+                boxElement: boxElement,
+                size: span.size,
+                color: span.color,
+                font: span.font
+            };
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'active-inline-input';
+            input.value = span.text;
+            input.style.left = boxElement.style.left;
+            input.style.top = boxElement.style.top;
+            input.style.minWidth = `${Math.max(parseFloat(boxElement.style.width) + 10, 80)}px`;
+            input.style.height = boxElement.style.height;
+            input.style.fontSize = `${activeEditTarget.size * (pdfPageImage.clientHeight / originalPageHeight)}px`;
+            input.style.color = activeEditTarget.color;
+
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    commitActiveInput();
+                } else if (e.key === 'Escape') {
+                    closeActiveInput();
+                }
+            });
+
+            interactiveOverlay.appendChild(input);
+            input.focus();
+            input.select();
+            activeInput = input;
+
+            positionFloatingToolbar(input);
+        }
+
+        function openInlineEditorForNewText(newObj, clickX, clickY) {
+            closeActiveInput();
+
+            const scaleY = pdfPageImage.clientHeight / originalPageHeight;
+            activeEditTarget = newObj;
+
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'active-inline-input';
+            input.value = newObj.newText;
+            input.style.left = `${clickX}px`;
+            input.style.top = `${clickY}px`;
+            input.style.minWidth = `120px`;
+            input.style.fontSize = `${newObj.size * scaleY}px`;
+            input.style.color = newObj.color;
+
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    commitActiveInput();
+                } else if (e.key === 'Escape') {
+                    closeActiveInput();
+                }
+            });
+
+            interactiveOverlay.appendChild(input);
+            input.focus();
+            input.select();
+            activeInput = input;
+
+            positionFloatingToolbar(input);
+        }
+
+        function positionFloatingToolbar(inputEl) {
+            floatingToolbar.classList.remove('hidden');
+            const rect = inputEl.getBoundingClientRect();
+            const wrapperRect = pageWrapper.getBoundingClientRect();
+
+            let toolLeft = rect.left - wrapperRect.left;
+            let toolTop = rect.top - wrapperRect.top - 46;
+
+            if (toolTop < 0) toolTop = rect.bottom - wrapperRect.top + 8;
+
+            floatingToolbar.style.left = `${toolLeft}px`;
+            floatingToolbar.style.top = `${toolTop}px`;
+
+            fontSizeDisplay.innerText = `${activeEditTarget.size.toFixed(1)}pt`;
+            colorPicker.value = activeEditTarget.color.length === 7 ? activeEditTarget.color : '#000000';
+            pageWrapper.appendChild(floatingToolbar);
+        }
+
+        function closeActiveInput() {
+            if (activeInput) {
+                activeInput.remove();
+                activeInput = null;
+            }
+            floatingToolbar.classList.add('hidden');
+            activeEditTarget = null;
+        }
+
+        // COMMIT & IMMEDIATELY RE-RENDER FROM SERVER
+        async function commitActiveInput() {
+            if (!activeInput || !activeEditTarget) return;
+
+            const val = activeInput.value;
+            if (val === '') {
+                closeActiveInput();
+                return;
+            }
+
+            liveStatusMsg.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Patching Content Stream...';
+            lucide.createIcons();
+
+            let editPayload = null;
+
+            if (activeEditTarget.isNew) {
+                editPayload = {
+                    type: 'add',
+                    page_index: currentPageIndex,
+                    x: activeEditTarget.x,
+                    y: activeEditTarget.y,
+                    newText: val,
+                    size: activeEditTarget.size,
+                    color: activeEditTarget.color
+                };
+            } else {
+                editPayload = {
+                    type: 'replace',
+                    page_index: currentPageIndex,
+                    bbox: activeEditTarget.span.bbox,
+                    oldText: activeEditTarget.span.text,
+                    newText: val,
+                    size: activeEditTarget.size,
+                    color: activeEditTarget.color,
+                    font: activeEditTarget.span.font
+                };
+            }
+
+            try {
+                const res = await fetch('/api/apply_edit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(editPayload)
+                });
+                const resData = await res.json();
+
+                if (resData.status === 'success') {
+                    // Update the image immediately! The user sees the change reflected live on the PDF!
+                    renderPageData(resData.data);
+                    liveStatusMsg.innerHTML = '<i data-lucide="check-circle" class="w-3.5 h-3.5 text-emerald-600"></i> Edit Applied to PostScript Stream!';
+                    lucide.createIcons();
+                } else {
+                    alert('Error applying edit: ' + resData.message);
+                }
+            } catch (err) {
+                alert('Network error: ' + err.message);
+            } finally {
+                closeActiveInput();
+            }
+        }
+
+        // Toolbar controls
+        sizeMinusBtn.addEventListener('click', () => {
+            if (activeEditTarget) {
+                activeEditTarget.size = Math.max(activeEditTarget.size - 0.5, 6);
+                fontSizeDisplay.innerText = `${activeEditTarget.size.toFixed(1)}pt`;
+                if (activeInput) {
+                    activeInput.style.fontSize = `${activeEditTarget.size * (pdfPageImage.clientHeight / originalPageHeight)}px`;
+                }
+            }
+        });
+
+        sizePlusBtn.addEventListener('click', () => {
+            if (activeEditTarget) {
+                activeEditTarget.size = Math.min(activeEditTarget.size + 0.5, 72);
+                fontSizeDisplay.innerText = `${activeEditTarget.size.toFixed(1)}pt`;
+                if (activeInput) {
+                    activeInput.style.fontSize = `${activeEditTarget.size * (pdfPageImage.clientHeight / originalPageHeight)}px`;
+                }
+            }
+        });
+
+        colorPicker.addEventListener('input', (e) => {
+            if (activeEditTarget) {
+                activeEditTarget.color = e.target.value;
+                if (activeInput) {
+                    activeInput.style.color = activeEditTarget.color;
+                }
+            }
+        });
+
+        saveEditBtn.addEventListener('click', () => {
+            commitActiveInput();
+        });
+
+        deleteTextBtn.addEventListener('click', async () => {
+            if (!activeEditTarget || activeEditTarget.isNew) {
+                closeActiveInput();
+                return;
+            }
+
+            const editPayload = {
+                type: 'redact',
+                page_index: currentPageIndex,
+                bbox: activeEditTarget.span.bbox
+            };
+
+            liveStatusMsg.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Erasing...';
+            lucide.createIcons();
+
+            try {
+                const res = await fetch('/api/apply_edit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(editPayload)
+                });
+                const resData = await res.json();
+                if (resData.status === 'success') {
+                    renderPageData(resData.data);
+                    liveStatusMsg.innerHTML = '<i data-lucide="check-circle" class="w-3.5 h-3.5 text-emerald-600"></i> Text Erased Cleanly!';
+                    lucide.createIcons();
+                }
+            } catch (err) {
+                alert('Erase failed: ' + err.message);
+            } finally {
+                closeActiveInput();
+            }
+        });
+
+        // Pagination
+        prevPageBtn.addEventListener('click', () => {
+            if (currentPageIndex > 0) loadPage(currentPageIndex - 1);
+        });
+        nextPageBtn.addEventListener('click', () => {
+            if (currentPageIndex < totalPages - 1) loadPage(currentPageIndex + 1);
+        });
+
+        // Zoom
+        zoomInBtn.addEventListener('click', () => {
+            zoomLevel = Math.min(zoomLevel + 0.15, 2.0);
+            applyZoom();
+        });
+        zoomOutBtn.addEventListener('click', () => {
+            zoomLevel = Math.max(zoomLevel - 0.15, 0.6);
+            applyZoom();
+        });
+
+        function applyZoom() {
+            pageWrapper.style.transform = `scale(${zoomLevel})`;
+            zoomLabel.innerText = `${Math.round(zoomLevel * 100)}%`;
+        }
+
+        // Upload custom PDF
+        pdfFileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            liveStatusMsg.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Loading Custom PDF...';
+            lucide.createIcons();
+
+            const reader = new FileReader();
+            reader.onload = async () => {
+                const base64Data = reader.result;
+                const res = await fetch('/api/upload', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pdf_base64: base64Data })
+                });
+                const resData = await res.json();
+                if (resData.status === 'success') {
+                    renderPageData(resData.data);
+                    liveStatusMsg.innerHTML = '<i data-lucide="check-circle" class="w-3.5 h-3.5 text-emerald-600"></i> Custom PDF Loaded!';
+                    lucide.createIcons();
+                } else {
+                    alert('Failed to load PDF: ' + resData.message);
+                }
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // Download Clean PDF
+        downloadPdfBtn.addEventListener('click', async () => {
+            downloadPdfBtn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Downloading...';
+            lucide.createIcons();
+
+            try {
+                const res = await fetch('/api/export', { method: 'POST' });
+                const data = await res.json();
+
+                if (data.status === 'success') {
+                    const byteChars = atob(data.pdf_base64);
+                    const byteNumbers = new Array(byteChars.length);
+                    for (let i = 0; i < byteChars.length; i++) {
+                        byteNumbers[i] = byteChars.charCodeAt(i);
+                    }
+                    const byteArray = new Uint8Array(byteNumbers);
+                    const blob = new Blob([byteArray], { type: 'application/pdf' });
+
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(blob);
+                    link.download = data.filename || 'edited_clean.pdf';
+                    link.click();
+                } else {
+                    alert('Export failed: ' + data.message);
+                }
+            } catch (err) {
+                alert('Export error: ' + err.message);
+            } finally {
+                downloadPdfBtn.innerHTML = '<i data-lucide="download" class="w-4 h-4"></i> Download Clean PDF';
+                lucide.createIcons();
+            }
+        });
+
+        window.addEventListener('resize', () => {
+            rebuildInteractiveOverlay();
+        });
+
+        loadPage(0);
+    </script>
+</body>
+</html>
