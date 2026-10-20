@@ -3,101 +3,300 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GhostPDF Studio - Low-Level Stream Editor</title>
+    <title>GhostPDF Studio - Global Search, Replace & Anti-Overlap Editor</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
     <style>
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f172a;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #334155;
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #475569;
+        }
+
         .page-container {
             position: relative;
-            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+            box-shadow: 0 20px 35px -10px rgba(0, 0, 0, 0.4), 0 10px 15px -5px rgba(0, 0, 0, 0.2);
             user-select: none;
+            transition: transform 0.15s ease-out;
         }
-        .text-overlay-box {
+
+        /* Overlay hitboxes for selectable text */
+        .text-target-box {
             position: absolute;
             cursor: pointer;
-            border-radius: 2px;
-            transition: background 0.1s ease, outline 0.1s ease;
+            border-radius: 3px;
+            transition: background 0.12s ease, outline 0.12s ease;
+            z-index: 10;
         }
-        .text-overlay-box:hover {
-            background-color: rgba(59, 130, 246, 0.2);
+        .text-target-box:hover {
+            background-color: rgba(59, 130, 246, 0.25);
+            outline: 2px solid #3B82F6;
+        }
+        .text-target-box.target-word {
+            border-radius: 2px;
+        }
+        .text-target-box.target-line {
+            border-radius: 3px;
+        }
+        .text-target-box.target-block {
+            border-radius: 4px;
+            outline: 1px dashed rgba(59, 130, 246, 0.5);
+        }
+        .text-target-box.target-block:hover {
             outline: 2px solid #2563EB;
         }
-        .active-inline-input {
+
+        /* Search Highlights */
+        .search-match-highlight {
             position: absolute;
-            border: 2px solid #2563EB;
-            background: rgba(255, 255, 255, 0.98);
-            outline: none;
-            padding: 0 4px;
-            border-radius: 4px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-            z-index: 50;
+            background-color: rgba(245, 158, 11, 0.4);
+            border: 2px solid #F59E0B;
+            border-radius: 3px;
+            pointer-events: none;
+            z-index: 25;
+            transition: all 0.15s ease;
         }
-        .floating-toolbar {
+        .search-match-highlight.active-match {
+            background-color: rgba(239, 68, 68, 0.55);
+            border-color: #EF4444;
+            box-shadow: 0 0 14px rgba(239, 68, 68, 0.9);
+            z-index: 26;
+            animation: pulseActiveMatch 1.2s infinite ease-in-out;
+        }
+        @keyframes pulseActiveMatch {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.04); }
+        }
+
+        /* Image hitboxes */
+        .image-target-box {
             position: absolute;
-            background: #0F172A;
-            color: white;
-            border-radius: 8px;
-            padding: 6px 12px;
+            cursor: pointer;
+            border: 2px dashed rgba(168, 85, 247, 0.7);
+            background: rgba(168, 85, 247, 0.12);
+            border-radius: 6px;
+            transition: all 0.15s ease;
+            z-index: 15;
+        }
+        .image-target-box:hover {
+            border-color: #C084FC;
+            background: rgba(168, 85, 247, 0.28);
+            box-shadow: 0 0 15px rgba(168, 85, 247, 0.45);
+        }
+        .image-badge {
+            position: absolute;
+            top: 6px;
+            left: 6px;
+            background: #1E1B4B;
+            color: #E9D5FF;
+            border: 1px solid #7E22CE;
+            padding: 3px 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
             display: flex;
             align-items: center;
-            gap: 10px;
-            box-shadow: 0 12px 24px rgba(0,0,0,0.3);
-            z-index: 60;
-            font-size: 13px;
+            gap: 5px;
+            pointer-events: none;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.4);
+        }
+
+        /* Active Draggable Card */
+        .draggable-editor-card {
+            position: absolute;
+            background: #0F172A;
+            color: #F8FAFC;
+            border-radius: 12px;
+            border: 1px solid #334155;
+            box-shadow: 0 25px 40px -10px rgba(0, 0, 0, 0.6), 0 0 0 2px rgba(59, 130, 246, 0.4);
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            width: 340px;
+            min-width: 280px;
+            user-select: none;
+            overflow: hidden;
+            animation: popIn 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes popIn {
+            0% { transform: scale(0.95); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .drag-header {
+            cursor: grab;
+            background: #1E293B;
+            padding: 9px 12px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid #334155;
+        }
+        .drag-header:active {
+            cursor: grabbing;
+        }
+
+        /* Ghost box during drag */
+        .ghost-placement-box {
+            position: absolute;
+            border: 2px dashed #3B82F6;
+            background: rgba(59, 130, 246, 0.15);
+            border-radius: 4px;
+            pointer-events: none;
+            z-index: 90;
+            transition: left 0.05s ease, top 0.05s ease;
+        }
+
+        /* Marquee selection rect */
+        .marquee-rect {
+            position: absolute;
+            border: 2px dashed #EF4444;
+            background: rgba(239, 68, 68, 0.15);
+            pointer-events: none;
+            z-index: 80;
+        }
+
+        .tool-btn.active {
+            background-color: #3B82F6;
+            color: #FFFFFF;
+        }
+
+        .granularity-btn.active {
+            background-color: #2563EB;
+            color: #FFFFFF;
+            font-weight: 600;
         }
     </style>
 </head>
-<body class="bg-slate-100 text-slate-800 h-screen flex flex-col font-sans overflow-hidden">
+<body class="bg-slate-900 text-slate-100 h-screen flex flex-col font-sans overflow-hidden select-none">
 
     <!-- Top Navigation Header -->
-    <header class="bg-white border-b border-slate-200 px-6 py-3 flex items-center justify-between shadow-sm z-30">
-        <div class="flex items-center gap-4">
+    <header class="bg-slate-950 border-b border-slate-800 px-4 py-2.5 flex items-center justify-between shadow-md z-30 flex-wrap gap-2">
+        <!-- Left: Brand & File Actions -->
+        <div class="flex items-center gap-3">
             <div class="flex items-center gap-2">
-                <div class="bg-blue-600 text-white p-2 rounded-lg font-bold flex items-center justify-center">
-                    <i data-lucide="zap" class="w-5 h-5"></i>
+                <div class="bg-gradient-to-tr from-blue-600 via-indigo-600 to-purple-600 text-white p-2 rounded-lg font-bold flex items-center justify-center shadow-lg shadow-blue-500/20">
+                    <i data-lucide="ghost" class="w-5 h-5"></i>
                 </div>
                 <div>
-                    <h1 class="font-bold text-lg leading-tight text-slate-900">GhostPDF Studio</h1>
-                    <span class="text-xs font-semibold px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded-full">Low-Level Byte Stream Engine</span>
+                    <div class="flex items-center gap-2">
+                        <h1 class="font-bold text-base tracking-tight text-white">GhostPDF Studio</h1>
+                        <span class="text-[10px] font-bold px-1.5 py-0.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded flex items-center gap-1">
+                            <i data-lucide="shield-check" class="w-3 h-3"></i> Anti-Overlap Reflow
+                        </span>
+                    </div>
+                    <p class="text-[11px] text-slate-400 leading-none">Global Search, Replace & Stream Layout Engine</p>
                 </div>
             </div>
 
-            <div class="h-6 w-px bg-slate-300 mx-2"></div>
+            <div class="h-6 w-px bg-slate-800 mx-1"></div>
 
-            <!-- Upload Custom File -->
-            <label class="cursor-pointer flex items-center gap-2 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 rounded-md text-sm font-medium transition">
-                <i data-lucide="upload" class="w-4 h-4"></i>
-                <span>Open Custom PDF</span>
+            <!-- Upload PDF -->
+            <label class="cursor-pointer flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-lg text-xs font-medium transition border border-slate-700" title="Upload any PDF to edit locally">
+                <i data-lucide="upload" class="w-3.5 h-3.5 text-blue-400"></i>
+                <span>Open PDF</span>
                 <input type="file" id="pdfFileInput" accept="application/pdf" class="hidden">
             </label>
         </div>
 
-        <!-- Center: Pagination & Zoom -->
-        <div class="flex items-center gap-3 bg-slate-100 px-3 py-1 rounded-lg text-sm">
-            <button id="prevPageBtn" class="p-1 hover:bg-white rounded transition text-slate-600 hover:text-slate-900 disabled:opacity-30">
-                <i data-lucide="chevron-left" class="w-4 h-4"></i>
-            </button>
-            <span id="pageIndicator" class="font-medium text-slate-700">Page 1 of 1</span>
-            <button id="nextPageBtn" class="p-1 hover:bg-white rounded transition text-slate-600 hover:text-slate-900 disabled:opacity-30">
-                <i data-lucide="chevron-right" class="w-4 h-4"></i>
-            </button>
+        <!-- Center: Tool Modes & Granularity -->
+        <div class="flex items-center gap-2 bg-slate-900 p-1 rounded-xl border border-slate-800 shadow-inner">
+            <!-- Main Tools -->
+            <div class="flex items-center gap-1">
+                <button id="toolSelectBtn" class="tool-btn active flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition" title="Select & Edit Text / Image">
+                    <i data-lucide="mouse-pointer" class="w-3.5 h-3.5"></i>
+                    <span>Select</span>
+                </button>
+                <button id="toolAddTextBtn" class="tool-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition" title="Add movable text box">
+                    <i data-lucide="plus-circle" class="w-3.5 h-3.5 text-emerald-400"></i>
+                    <span>Add Text</span>
+                </button>
+                <button id="toolEraseAreaBtn" class="tool-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition" title="Draw rectangle to whiteout / erase area">
+                    <i data-lucide="square-dashed" class="w-3.5 h-3.5 text-rose-400"></i>
+                    <span>Erase Area</span>
+                </button>
+                <button id="toolPanBtn" class="tool-btn flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition" title="Hand Tool (Pan canvas, or hold Space)">
+                    <i data-lucide="hand" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
 
-            <div class="h-4 w-px bg-slate-300 mx-1"></div>
+            <div class="h-4 w-px bg-slate-800 mx-1"></div>
 
-            <button id="zoomOutBtn" class="p-1 hover:bg-white rounded transition text-slate-600">
-                <i data-lucide="minus" class="w-4 h-4"></i>
-            </button>
-            <span id="zoomLabel" class="w-12 text-center font-medium">100%</span>
-            <button id="zoomInBtn" class="p-1 hover:bg-white rounded transition text-slate-600">
-                <i data-lucide="plus" class="w-4 h-4"></i>
-            </button>
+            <!-- Granularity Selector -->
+            <div class="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[11px]" id="granularityContainer">
+                <span class="text-slate-400 px-2 font-medium">Select:</span>
+                <button id="granWordBtn" class="granularity-btn active px-2.5 py-1 rounded text-slate-300 hover:text-white transition flex items-center gap-1" title="Click to select individual word">
+                    <span>🔤 Word</span>
+                </button>
+                <button id="granLineBtn" class="granularity-btn px-2.5 py-1 rounded text-slate-300 hover:text-white transition flex items-center gap-1" title="Click to select whole line">
+                    <span>📝 Line</span>
+                </button>
+                <button id="granBlockBtn" class="granularity-btn px-2.5 py-1 rounded text-slate-300 hover:text-white transition flex items-center gap-1" title="Click to select whole text box / block">
+                    <span>📦 Text Box</span>
+                </button>
+            </div>
         </div>
 
-        <!-- Right: Actions -->
-        <div class="flex items-center gap-3">
-            <button id="downloadPdfBtn" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-semibold shadow-sm transition flex items-center gap-2">
+        <!-- Right: Find & Replace, Undo/Redo, Pagination, Zoom, Export -->
+        <div class="flex items-center gap-2">
+            <!-- Global Find & Replace Toggle Button -->
+            <button id="findReplaceToggleBtn" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-amber-300 hover:text-white bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition shadow-sm" title="Global Search & Replace across whole PDF (Ctrl+F / Cmd+F)">
+                <i data-lucide="search" class="w-3.5 h-3.5 text-amber-400"></i>
+                <span>Find & Replace</span>
+            </button>
+
+            <!-- Undo / Redo -->
+            <div class="flex items-center bg-slate-900 rounded-lg border border-slate-800 p-0.5">
+                <button id="undoBtn" disabled class="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none transition" title="Undo (Ctrl+Z / Cmd+Z)">
+                    <i data-lucide="undo-2" class="w-4 h-4"></i>
+                </button>
+                <button id="redoBtn" disabled class="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none transition" title="Redo (Ctrl+Y / Cmd+Shift+Z)">
+                    <i data-lucide="redo-2" class="w-4 h-4"></i>
+                </button>
+            </div>
+
+            <!-- Pagination -->
+            <div class="flex items-center bg-slate-900 px-2 py-1 rounded-lg border border-slate-800 text-xs">
+                <button id="prevPageBtn" class="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white disabled:opacity-30">
+                    <i data-lucide="chevron-left" class="w-3.5 h-3.5"></i>
+                </button>
+                <span id="pageIndicator" class="font-medium text-slate-300 px-2">Page 1 of 1</span>
+                <button id="nextPageBtn" class="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white disabled:opacity-30">
+                    <i data-lucide="chevron-right" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+
+            <!-- Zoom Controls -->
+            <div class="flex items-center bg-slate-900 px-2 py-1 rounded-lg border border-slate-800 text-xs">
+                <button id="zoomOutBtn" class="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Zoom Out">
+                    <i data-lucide="minus" class="w-3.5 h-3.5"></i>
+                </button>
+                <button id="zoomResetBtn" class="w-12 text-center font-mono font-medium text-slate-200 hover:text-blue-400 transition" title="Click to reset to 100%">
+                    <span id="zoomLabel">100%</span>
+                </button>
+                <button id="zoomInBtn" class="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Zoom In">
+                    <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                </button>
+                <button id="fitWidthBtn" class="p-1 ml-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Fit to Width">
+                    <i data-lucide="maximize-2" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+
+            <!-- Download Clean PDF -->
+            <button id="downloadPdfBtn" class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow-md shadow-emerald-600/20 transition flex items-center gap-1.5">
                 <i data-lucide="download" class="w-4 h-4"></i>
                 <span>Download Clean PDF</span>
             </button>
@@ -105,95 +304,430 @@
     </header>
 
     <!-- Sub-bar: Instructions & Live Status -->
-    <div class="bg-blue-50 border-b border-blue-100 px-6 py-2 text-xs text-blue-900 flex items-center justify-between">
+    <div class="bg-slate-950/70 border-b border-slate-800/80 px-6 py-1.5 text-xs text-slate-300 flex items-center justify-between backdrop-blur-sm">
         <div class="flex items-center gap-2">
-            <i data-lucide="info" class="w-4 h-4 text-blue-600"></i>
-            <span><strong>Click on any text</strong> to edit. Press <strong>Enter</strong> or click <strong>Apply</strong> to immediately rewrite the PostScript byte stream!</span>
+            <span id="modeDescription" class="flex items-center gap-1.5 text-slate-300">
+                <i data-lucide="info" class="w-3.5 h-3.5 text-blue-400"></i>
+                <span><strong>Global Find & Replace:</strong> Search any word/amount across all pages and batch replace with automatic reflow! Press <strong>Cmd+F</strong> or <strong>Ctrl+F</strong>.</span>
+            </span>
         </div>
-        <div id="liveStatusMsg" class="font-semibold text-emerald-700 flex items-center gap-1.5">
+        <div id="liveStatusMsg" class="font-medium text-emerald-400 flex items-center gap-1.5 text-[11px]">
             <i data-lucide="check-circle" class="w-3.5 h-3.5"></i>
-            <span>Ready for Click-to-Edit</span>
+            <span>Ready</span>
         </div>
     </div>
 
     <!-- Main Workspace Viewport -->
-    <main id="viewportContainer" class="flex-1 overflow-auto p-8 flex justify-center items-start bg-slate-200">
-        <div id="pageWrapper" class="page-container relative bg-white transition-transform origin-top">
+    <main id="viewportContainer" class="flex-1 overflow-auto p-8 flex justify-center items-start bg-slate-950 cursor-default relative">
+        <div id="pageWrapper" class="page-container relative bg-white transition-transform origin-top rounded shadow-2xl">
             <!-- Background Rendered Page Image -->
             <img id="pdfPageImage" src="" alt="PDF Page" class="block w-full h-auto select-none pointer-events-none" draggable="false">
 
             <!-- Interactive Click-to-Edit Layer -->
-            <div id="interactiveOverlay" class="absolute inset-0 cursor-text"></div>
+            <div id="interactiveOverlay" class="absolute inset-0"></div>
+
+            <!-- Search Matches Highlight Layer -->
+            <div id="searchHighlightsLayer" class="absolute inset-0 pointer-events-none"></div>
+
+            <!-- Ghost Preview Box while Dragging -->
+            <div id="ghostPlacementBox" class="ghost-placement-box hidden"></div>
+
+            <!-- Selection Marquee Rect -->
+            <div id="selectionMarquee" class="marquee-rect hidden"></div>
         </div>
     </main>
 
-    <!-- Floating Format Bar (Appears on Active Selection) -->
-    <div id="floatingToolbar" class="floating-toolbar hidden">
-        <span class="font-medium text-slate-400 text-xs">Size:</span>
-        <button id="sizeMinusBtn" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 rounded font-bold">-</button>
-        <span id="fontSizeDisplay" class="font-mono text-xs text-emerald-400">12pt</span>
-        <button id="sizePlusBtn" class="px-2 py-0.5 bg-slate-800 hover:bg-slate-700 rounded font-bold">+</button>
+    <!-- Global Find & Replace Floating Card / Modal -->
+    <div id="findReplaceModal" class="hidden absolute top-14 right-6 bg-slate-900 border border-slate-700 text-slate-100 p-4 rounded-xl shadow-2xl z-[130] w-[380px] flex flex-col gap-3">
+        <!-- Header -->
+        <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+            <div class="flex items-center gap-2">
+                <i data-lucide="search" class="w-4 h-4 text-amber-400"></i>
+                <span class="text-xs font-semibold text-slate-200">Global Find & Replace</span>
+                <span id="findMatchesCountBadge" class="text-[10px] font-mono bg-slate-800 text-amber-300 px-1.5 py-0.5 rounded border border-slate-700">0 matches</span>
+            </div>
+            <button id="findCloseBtn" class="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Close (Esc)">
+                <i data-lucide="x" class="w-3.5 h-3.5"></i>
+            </button>
+        </div>
 
-        <div class="h-4 w-px bg-slate-700 mx-1"></div>
+        <!-- Find Input -->
+        <div class="flex flex-col gap-1">
+            <label class="text-[10px] font-medium text-slate-400">Find in Document:</label>
+            <div class="flex items-center gap-1 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1">
+                <input type="text" id="findSearchInput" placeholder="Type search word or phrase..." class="flex-1 bg-transparent text-xs text-slate-100 focus:outline-none font-sans">
+                <button id="findPrevBtn" class="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Previous occurrence">
+                    <i data-lucide="chevron-up" class="w-3.5 h-3.5"></i>
+                </button>
+                <button id="findNextBtn" class="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Next occurrence">
+                    <i data-lucide="chevron-down" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+        </div>
 
-        <input type="color" id="colorPicker" value="#000000" class="w-6 h-6 bg-transparent cursor-pointer rounded border-0">
+        <!-- Replace Input -->
+        <div class="flex flex-col gap-1">
+            <label class="text-[10px] font-medium text-slate-400">Replace With:</label>
+            <input type="text" id="findReplaceInput" placeholder="New replacement text..." class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-blue-500 font-sans">
+        </div>
 
-        <div class="h-4 w-px bg-slate-700 mx-1"></div>
+        <!-- Scope & Reflow Options -->
+        <div class="flex items-center justify-between text-[11px] text-slate-300 px-1">
+            <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" id="findScopeAllPages" checked class="rounded border-slate-700 text-blue-600 focus:ring-0">
+                <span>Whole PDF (All Pages)</span>
+            </label>
+            <label class="flex items-center gap-1.5 cursor-pointer">
+                <input type="checkbox" id="findReflowToggle" checked class="rounded border-slate-700 text-blue-600 focus:ring-0">
+                <span class="text-blue-400 font-medium">🛡️ Anti-Overlap</span>
+            </label>
+        </div>
 
-        <button id="deleteTextBtn" class="px-2 py-1 bg-rose-600 hover:bg-rose-700 rounded text-xs flex items-center gap-1 transition" title="Clean Whiteout">
-            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
-            <span>Erase</span>
-        </button>
+        <!-- Actions -->
+        <div class="flex items-center justify-between gap-2 pt-2 border-t border-slate-800">
+            <button id="findReplaceCurrentBtn" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-lg text-xs font-medium transition flex items-center gap-1">
+                <span>Replace Next</span>
+            </button>
+            <button id="findReplaceAllBtn" class="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-semibold shadow-md shadow-amber-600/30 transition flex items-center gap-1.5">
+                <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+                <span>Replace All Everywhere</span>
+            </button>
+        </div>
+    </div>
 
-        <button id="saveEditBtn" class="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 rounded text-xs font-semibold flex items-center gap-1 transition">
-            <i data-lucide="check" class="w-3.5 h-3.5"></i>
-            <span>Apply</span>
-        </button>
+    <!-- Draggable Text Editor Card Template -->
+    <div id="editorCard" class="draggable-editor-card hidden">
+        <!-- Header (Drag Handle) -->
+        <div id="editorDragHeader" class="drag-header">
+            <div class="flex items-center gap-2">
+                <i data-lucide="grip-vertical" class="w-4 h-4 text-slate-400"></i>
+                <span id="editorCardTitle" class="text-xs font-semibold text-slate-200">Edit Text</span>
+                <span id="posCoordsBadge" class="text-[10px] font-mono bg-slate-800 text-blue-400 px-1.5 py-0.5 rounded border border-slate-700">X: 0, Y: 0</span>
+            </div>
+            <div class="flex items-center gap-1">
+                <button id="editorCloseBtn" class="p-1 hover:bg-slate-700 rounded text-slate-400 hover:text-white" title="Cancel (Esc)">
+                    <i data-lucide="x" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Text Input Body -->
+        <div class="p-3 flex flex-col gap-2.5 bg-slate-900">
+            <textarea id="editorTextInput" rows="3" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 font-sans resize-y leading-tight" placeholder="Type text here..."></textarea>
+
+            <div class="flex items-center justify-between px-2 py-1 bg-slate-950 rounded-lg border border-slate-800 text-[11px]">
+                <label class="flex items-center gap-1.5 cursor-pointer text-slate-200">
+                    <input type="checkbox" id="editorReflowToggle" checked class="rounded border-slate-700 text-blue-600 focus:ring-0">
+                    <span class="font-semibold text-blue-400 flex items-center gap-1">
+                        <i data-lucide="shield-check" class="w-3.5 h-3.5"></i> Auto-Reflow & Shift Content
+                    </span>
+                </label>
+                <span class="text-[10px] text-emerald-400 font-medium">Zero Overlap</span>
+            </div>
+
+            <div class="flex items-center justify-between gap-1 flex-wrap text-xs bg-slate-950 p-1.5 rounded-lg border border-slate-800">
+                <select id="editorFontFamily" class="bg-slate-800 text-slate-200 text-[11px] rounded px-1.5 py-1 border border-slate-700 focus:outline-none">
+                    <option value="helv">Sans-Serif (Helvetica)</option>
+                    <option value="times">Serif (Times)</option>
+                    <option value="courier">Monospace (Courier)</option>
+                </select>
+
+                <div class="flex items-center gap-0.5 bg-slate-800 rounded border border-slate-700 px-1 py-0.5">
+                    <button id="sizeDecBtn" class="px-1.5 py-0.5 hover:bg-slate-700 rounded text-slate-300 font-bold">-</button>
+                    <span id="fontSizeVal" class="font-mono text-[11px] text-blue-400 px-1 w-9 text-center">12pt</span>
+                    <button id="sizeIncBtn" class="px-1.5 py-0.5 hover:bg-slate-700 rounded text-slate-300 font-bold">+</button>
+                </div>
+
+                <div class="flex items-center gap-0.5 bg-slate-800 rounded border border-slate-700 p-0.5">
+                    <button id="styleBoldBtn" class="px-1.5 py-0.5 hover:bg-slate-700 rounded text-[11px] font-bold text-slate-300" title="Bold">B</button>
+                    <button id="styleItalicBtn" class="px-1.5 py-0.5 hover:bg-slate-700 rounded text-[11px] italic text-slate-300" title="Italic">I</button>
+                </div>
+
+                <div class="flex items-center gap-1">
+                    <input type="color" id="editorColorInput" value="#000000" class="w-6 h-6 bg-transparent cursor-pointer rounded border border-slate-700" title="Pick text color">
+                </div>
+            </div>
+
+            <div class="text-[10px] text-slate-400 flex items-center justify-between px-1">
+                <span>Drag header to move • Arrow keys to nudge</span>
+                <span id="movedIndicator" class="text-amber-400 hidden flex items-center gap-1 font-medium">
+                    <i data-lucide="move" class="w-3 h-3"></i> Position changed
+                </span>
+            </div>
+
+            <div class="flex items-center justify-between gap-2 pt-1 border-t border-slate-800">
+                <button id="editorEraseBtn" class="px-2.5 py-1.5 bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/30 rounded-lg text-xs font-medium flex items-center gap-1 transition" title="Clean Whiteout / Erase original text">
+                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                    <span>Erase</span>
+                </button>
+
+                <div class="flex items-center gap-1.5">
+                    <button id="editorCancelBtn" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-medium transition">
+                        Cancel
+                    </button>
+                    <button id="editorApplyBtn" class="px-3.5 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold shadow-md shadow-blue-600/30 transition flex items-center gap-1">
+                        <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                        <span>Apply (Enter)</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Draggable Image Inspector & Replace Card -->
+    <div id="imageCard" class="draggable-editor-card hidden border-purple-500/40">
+        <div id="imageDragHeader" class="drag-header bg-purple-950/80 border-b border-purple-900/50">
+            <div class="flex items-center gap-2">
+                <i data-lucide="image" class="w-4 h-4 text-purple-400"></i>
+                <span class="text-xs font-semibold text-purple-200">Image Inspector & Replace</span>
+                <span id="imgDimensionsBadge" class="text-[10px] font-mono bg-purple-900/80 text-purple-300 px-1.5 py-0.5 rounded border border-purple-700">512×512 pt</span>
+            </div>
+            <button id="imageCloseBtn" class="p-1 hover:bg-purple-900 rounded text-purple-300 hover:text-white" title="Cancel (Esc)">
+                <i data-lucide="x" class="w-3.5 h-3.5"></i>
+            </button>
+        </div>
+
+        <div class="p-3 flex flex-col gap-2.5 bg-slate-900">
+            <div class="flex items-center gap-3 bg-slate-950 p-2.5 rounded-lg border border-slate-800">
+                <div id="imgPreviewThumb" class="w-16 h-16 bg-slate-800 rounded border border-slate-700 flex items-center justify-center overflow-hidden flex-shrink-0">
+                    <i data-lucide="image" class="w-6 h-6 text-slate-500"></i>
+                </div>
+                <div class="flex-1 flex flex-col gap-1.5">
+                    <label class="cursor-pointer px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-semibold transition text-center shadow flex items-center justify-center gap-1.5">
+                        <i data-lucide="upload" class="w-3.5 h-3.5"></i>
+                        <span>Upload New Image</span>
+                        <input type="file" id="replaceImageFileInput" accept="image/*" class="hidden">
+                    </label>
+                    <span id="imgPixelInfo" class="text-[10px] text-slate-400 text-center">PNG, JPG, WEBP (Any Resolution)</span>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 text-xs bg-slate-950 p-2 rounded-lg border border-slate-800">
+                <div>
+                    <label class="block text-[10px] text-slate-400 mb-0.5">Width (pt):</label>
+                    <input type="number" id="imgTargetWidth" class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-100 font-mono text-xs focus:outline-none focus:border-purple-500">
+                </div>
+                <div>
+                    <label class="block text-[10px] text-slate-400 mb-0.5">Height (pt):</label>
+                    <input type="number" id="imgTargetHeight" class="w-full bg-slate-800 border border-slate-700 rounded px-2 py-1 text-slate-100 font-mono text-xs focus:outline-none focus:border-purple-500">
+                </div>
+                <div class="col-span-2 flex items-center justify-between text-[11px] text-slate-300 pt-0.5">
+                    <label class="flex items-center gap-1.5 cursor-pointer">
+                        <input type="checkbox" id="imgLockAspect" checked class="rounded border-slate-700 text-purple-600 focus:ring-0">
+                        <span>Lock Aspect Ratio</span>
+                    </label>
+                    <span id="imgDeltaIndicator" class="text-[10px] font-mono text-emerald-400">Δy: 0 pt</span>
+                </div>
+            </div>
+
+            <div class="flex items-center justify-between px-2.5 py-1.5 bg-purple-950/40 rounded-lg border border-purple-800/40 text-[11px]">
+                <label class="flex items-center gap-1.5 cursor-pointer text-slate-200">
+                    <input type="checkbox" id="imgReflowToggle" checked class="rounded border-slate-700 text-purple-600 focus:ring-0">
+                    <span class="font-semibold text-purple-300 flex items-center gap-1">
+                        <i data-lucide="shield-check" class="w-3.5 h-3.5"></i> Auto-Shift Content Below
+                    </span>
+                </label>
+                <span class="text-[10px] text-emerald-400 font-medium">Anti-Overlap</span>
+            </div>
+
+            <p class="text-[10px] text-slate-400 leading-tight px-1">
+                If the replacement image is taller (e.g. 784x784 vs 512x512), all text and content below will shift down so nothing overlaps. If shorter, content shifts upward.
+            </p>
+
+            <div class="flex items-center justify-between gap-2 pt-1 border-t border-slate-800">
+                <button id="imgDeleteBtn" class="px-2.5 py-1.5 bg-rose-600/20 hover:bg-rose-600 text-rose-400 hover:text-white border border-rose-500/30 rounded-lg text-xs font-medium flex items-center gap-1 transition">
+                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                    <span>Delete</span>
+                </button>
+                <div class="flex items-center gap-1.5">
+                    <button id="imgCancelBtn" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-lg">
+                        Cancel
+                    </button>
+                    <button id="imgApplyBtn" class="px-3.5 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-xs font-semibold shadow-md shadow-purple-600/30 flex items-center gap-1 transition">
+                        <i data-lucide="check" class="w-3.5 h-3.5"></i>
+                        <span>Apply (Enter)</span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Area Action Floating Modal -->
+    <div id="areaActionModal" class="hidden absolute bg-slate-900 border border-slate-700 text-slate-100 p-3 rounded-xl shadow-2xl z-[120] flex flex-col gap-2">
+        <div class="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
+            <i data-lucide="square-dashed" class="w-3.5 h-3.5 text-rose-400"></i>
+            <span>Selected Region</span>
+        </div>
+        <p class="text-[11px] text-slate-400">Cleanly whiteout / redact this rectangular area without watermarks.</p>
+        <div class="flex items-center gap-2 pt-1">
+            <button id="areaWhiteoutConfirmBtn" class="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-lg shadow flex items-center gap-1">
+                <i data-lucide="eraser" class="w-3.5 h-3.5"></i>
+                <span>Whiteout Area</span>
+            </button>
+            <button id="areaCancelBtn" class="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-lg">
+                Cancel
+            </button>
+        </div>
     </div>
 
     <script>
+        // State variables
         let currentPageIndex = 0;
         let totalPages = 1;
         let originalPageWidth = 595;
         let originalPageHeight = 842;
         let zoomLevel = 1.0;
-        let pageSpans = [];
 
-        let activeInput = null;
-        let activeEditTarget = null;
+        // Structured text & image data from PyMuPDF
+        let pageWords = [];
+        let pageLines = [];
+        let pageBlocks = [];
+        let pageImages = [];
 
+        // Global Find & Replace state
+        let searchResults = [];
+        let flatMatches = [];
+        let currentMatchIndex = -1;
+        let searchDebounceTimer = null;
+
+        // Tools: 'select', 'addText', 'eraseArea', 'pan'
+        let activeTool = 'select';
+        // Granularity: 'word', 'line', 'block'
+        let activeGranularity = 'word';
+
+        // Text editor state
+        let activeEditorTarget = null;
+        let isDraggingEditor = false;
+        let dragStartMouseX = 0, dragStartMouseY = 0;
+        let dragStartCardX = 0, dragStartCardY = 0;
+
+        // Image inspector state
+        let activeImageTarget = null;
+        let isDraggingImageCard = false;
+        let dragStartImgCardX = 0, dragStartImgCardY = 0;
+        let newImageBase64 = null;
+        let newImageNaturalRatio = 1.0;
+
+        // Area selection state
+        let isMarqueeActive = false;
+        let marqueeStartX = 0, marqueeStartY = 0;
+        let marqueeRect = null;
+
+        // Pan tool state
+        let isPanning = false;
+        let panStartX = 0, panStartY = 0;
+        let panScrollLeft = 0, panScrollTop = 0;
+        let spacePressed = false;
+
+        // DOM Elements
+        const viewportContainer = document.getElementById('viewportContainer');
+        const pageWrapper = document.getElementById('pageWrapper');
         const pdfPageImage = document.getElementById('pdfPageImage');
         const interactiveOverlay = document.getElementById('interactiveOverlay');
-        const pageWrapper = document.getElementById('pageWrapper');
-        const floatingToolbar = document.getElementById('floatingToolbar');
-        const pageIndicator = document.getElementById('pageIndicator');
+        const searchHighlightsLayer = document.getElementById('searchHighlightsLayer');
+        const ghostPlacementBox = document.getElementById('ghostPlacementBox');
+        const selectionMarquee = document.getElementById('selectionMarquee');
+
+        // Navigation & Tools
+        const toolSelectBtn = document.getElementById('toolSelectBtn');
+        const toolAddTextBtn = document.getElementById('toolAddTextBtn');
+        const toolEraseAreaBtn = document.getElementById('toolEraseAreaBtn');
+        const toolPanBtn = document.getElementById('toolPanBtn');
+
+        const granWordBtn = document.getElementById('granWordBtn');
+        const granLineBtn = document.getElementById('granLineBtn');
+        const granBlockBtn = document.getElementById('granBlockBtn');
+
+        const undoBtn = document.getElementById('undoBtn');
+        const redoBtn = document.getElementById('redoBtn');
         const prevPageBtn = document.getElementById('prevPageBtn');
         const nextPageBtn = document.getElementById('nextPageBtn');
-        const zoomLabel = document.getElementById('zoomLabel');
-        const zoomInBtn = document.getElementById('zoomInBtn');
+        const pageIndicator = document.getElementById('pageIndicator');
+
         const zoomOutBtn = document.getElementById('zoomOutBtn');
+        const zoomInBtn = document.getElementById('zoomInBtn');
+        const zoomResetBtn = document.getElementById('zoomResetBtn');
+        const fitWidthBtn = document.getElementById('fitWidthBtn');
+        const zoomLabel = document.getElementById('zoomLabel');
+
         const pdfFileInput = document.getElementById('pdfFileInput');
         const downloadPdfBtn = document.getElementById('downloadPdfBtn');
         const liveStatusMsg = document.getElementById('liveStatusMsg');
+        const modeDescription = document.getElementById('modeDescription');
 
-        const fontSizeDisplay = document.getElementById('fontSizeDisplay');
-        const sizeMinusBtn = document.getElementById('sizeMinusBtn');
-        const sizePlusBtn = document.getElementById('sizePlusBtn');
-        const colorPicker = document.getElementById('colorPicker');
-        const deleteTextBtn = document.getElementById('deleteTextBtn');
-        const saveEditBtn = document.getElementById('saveEditBtn');
+        // Find & Replace DOM
+        const findReplaceToggleBtn = document.getElementById('findReplaceToggleBtn');
+        const findReplaceModal = document.getElementById('findReplaceModal');
+        const findCloseBtn = document.getElementById('findCloseBtn');
+        const findSearchInput = document.getElementById('findSearchInput');
+        const findReplaceInput = document.getElementById('findReplaceInput');
+        const findMatchesCountBadge = document.getElementById('findMatchesCountBadge');
+        const findPrevBtn = document.getElementById('findPrevBtn');
+        const findNextBtn = document.getElementById('findNextBtn');
+        const findScopeAllPages = document.getElementById('findScopeAllPages');
+        const findReflowToggle = document.getElementById('findReflowToggle');
+        const findReplaceCurrentBtn = document.getElementById('findReplaceCurrentBtn');
+        const findReplaceAllBtn = document.getElementById('findReplaceAllBtn');
+
+        // Text Editor Card DOM
+        const editorCard = document.getElementById('editorCard');
+        const editorDragHeader = document.getElementById('editorDragHeader');
+        const editorCardTitle = document.getElementById('editorCardTitle');
+        const posCoordsBadge = document.getElementById('posCoordsBadge');
+        const editorCloseBtn = document.getElementById('editorCloseBtn');
+        const editorTextInput = document.getElementById('editorTextInput');
+        const editorReflowToggle = document.getElementById('editorReflowToggle');
+        const editorFontFamily = document.getElementById('editorFontFamily');
+        const sizeDecBtn = document.getElementById('sizeDecBtn');
+        const sizeIncBtn = document.getElementById('sizeIncBtn');
+        const fontSizeVal = document.getElementById('fontSizeVal');
+        const styleBoldBtn = document.getElementById('styleBoldBtn');
+        const styleItalicBtn = document.getElementById('styleItalicBtn');
+        const editorColorInput = document.getElementById('editorColorInput');
+        const movedIndicator = document.getElementById('movedIndicator');
+        const editorEraseBtn = document.getElementById('editorEraseBtn');
+        const editorCancelBtn = document.getElementById('editorCancelBtn');
+        const editorApplyBtn = document.getElementById('editorApplyBtn');
+
+        // Image Card DOM
+        const imageCard = document.getElementById('imageCard');
+        const imageDragHeader = document.getElementById('imageDragHeader');
+        const imgDimensionsBadge = document.getElementById('imgDimensionsBadge');
+        const imageCloseBtn = document.getElementById('imageCloseBtn');
+        const replaceImageFileInput = document.getElementById('replaceImageFileInput');
+        const imgPreviewThumb = document.getElementById('imgPreviewThumb');
+        const imgPixelInfo = document.getElementById('imgPixelInfo');
+        const imgTargetWidth = document.getElementById('imgTargetWidth');
+        const imgTargetHeight = document.getElementById('imgTargetHeight');
+        const imgLockAspect = document.getElementById('imgLockAspect');
+        const imgDeltaIndicator = document.getElementById('imgDeltaIndicator');
+        const imgReflowToggle = document.getElementById('imgReflowToggle');
+        const imgDeleteBtn = document.getElementById('imgDeleteBtn');
+        const imgCancelBtn = document.getElementById('imgCancelBtn');
+        const imgApplyBtn = document.getElementById('imgApplyBtn');
+
+        // Area Modal
+        const areaActionModal = document.getElementById('areaActionModal');
+        const areaWhiteoutConfirmBtn = document.getElementById('areaWhiteoutConfirmBtn');
+        const areaCancelBtn = document.getElementById('areaCancelBtn');
 
         lucide.createIcons();
 
+        // -------------------------------------------------------------
+        // Data Loading & Rendering
+        // -------------------------------------------------------------
         async function loadPage(pageIdx = 0) {
+            setStatus('Loading page data...', 'loading');
             try {
                 const res = await fetch(`/api/page?num=${pageIdx}`);
                 const data = await res.json();
                 renderPageData(data);
+                setStatus('Ready', 'success');
             } catch (err) {
                 const res = await fetch('/api/sample');
                 const data = await res.json();
                 renderPageData(data);
+                setStatus('Ready', 'success');
             }
         }
 
@@ -202,375 +736,1394 @@
             totalPages = data.total_pages;
             originalPageWidth = data.width;
             originalPageHeight = data.height;
-            pageSpans = data.spans;
+
+            pageWords = data.words || data.spans || [];
+            pageLines = data.lines || [];
+            pageBlocks = data.blocks || [];
+            pageImages = data.images || [];
 
             pageIndicator.innerText = `Page ${currentPageIndex + 1} of ${totalPages}`;
             prevPageBtn.disabled = (currentPageIndex <= 0);
             nextPageBtn.disabled = (currentPageIndex >= totalPages - 1);
 
+            undoBtn.disabled = !data.can_undo;
+            redoBtn.disabled = !data.can_redo;
+
             pdfPageImage.src = data.image;
             pdfPageImage.onload = () => {
                 rebuildInteractiveOverlay();
+                renderSearchHighlights();
             };
         }
 
         function rebuildInteractiveOverlay() {
             interactiveOverlay.innerHTML = '';
-            closeActiveInput();
+            closeEditorCard();
+            closeImageCard();
+            closeAreaModal();
+
+            if (activeTool === 'pan' || activeTool === 'eraseArea') {
+                return;
+            }
 
             const renderWidth = pdfPageImage.clientWidth;
             const renderHeight = pdfPageImage.clientHeight;
+            if (!renderWidth || !renderHeight) return;
+
             const scaleX = renderWidth / originalPageWidth;
             const scaleY = renderHeight / originalPageHeight;
 
-            pageSpans.forEach(span => {
-                const [x0, y0, x1, y1] = span.bbox;
+            // 1. Render Images
+            pageImages.forEach(img => {
+                const [x0, y0, x1, y1] = img.bbox;
                 const left = x0 * scaleX;
                 const top = y0 * scaleY;
-                const width = Math.max((x1 - x0) * scaleX, 10);
-                const height = Math.max((y1 - y0) * scaleY, 14);
+                const width = Math.max((x1 - x0) * scaleX, 24);
+                const height = Math.max((y1 - y0) * scaleY, 24);
+
+                const imgBox = document.createElement('div');
+                imgBox.className = 'image-target-box';
+                imgBox.style.left = `${left}px`;
+                imgBox.style.top = `${top}px`;
+                imgBox.style.width = `${width}px`;
+                imgBox.style.height = `${height}px`;
+                imgBox.title = `Image (${Math.round(img.width)}×${Math.round(img.height)} pt). Click to replace or resize.`;
+
+                const badge = document.createElement('div');
+                badge.className = 'image-badge';
+                badge.innerHTML = `<i data-lucide="image" class="w-3.5 h-3.5 text-purple-400"></i><span>${Math.round(img.width)}×${Math.round(img.height)} pt</span>`;
+                imgBox.appendChild(badge);
+
+                imgBox.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    openImageInspector(img, left, top, width, height);
+                });
+
+                interactiveOverlay.appendChild(imgBox);
+            });
+
+            // 2. Render Text Elements based on activeGranularity
+            let itemsToRender = pageWords;
+            let targetClass = 'target-word';
+            let labelType = 'word';
+
+            if (activeGranularity === 'line') {
+                itemsToRender = pageLines.length ? pageLines : pageWords;
+                targetClass = 'target-line';
+                labelType = 'line';
+            } else if (activeGranularity === 'block') {
+                itemsToRender = pageBlocks.length ? pageBlocks : pageWords;
+                targetClass = 'target-block';
+                labelType = 'text box';
+            }
+
+            itemsToRender.forEach(item => {
+                const [x0, y0, x1, y1] = item.bbox;
+                const left = x0 * scaleX;
+                const top = y0 * scaleY;
+                const width = Math.max((x1 - x0) * scaleX, 8);
+                const height = Math.max((y1 - y0) * scaleY, 12);
 
                 const box = document.createElement('div');
-                box.className = 'text-overlay-box';
+                box.className = `text-target-box ${targetClass}`;
                 box.style.left = `${left}px`;
                 box.style.top = `${top}px`;
                 box.style.width = `${width}px`;
                 box.style.height = `${height}px`;
-                box.title = `Click to edit: "${span.text}"`;
+                box.title = `Click to edit ${labelType}: "${item.text.replace(/\n/g, ' ')}"`;
 
                 box.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    openInlineEditor(span, box);
+                    openEditorForItem(item, left, top, width, height);
+                });
+
+                box.addEventListener('dblclick', (e) => {
+                    e.stopPropagation();
+                    const line = findContainingLine(item.bbox);
+                    if (line) {
+                        setGranularity('line');
+                        const [lx0, ly0, lx1, ly1] = line.bbox;
+                        openEditorForItem(line, lx0 * scaleX, ly0 * scaleY, (lx1 - lx0) * scaleX, (ly1 - ly0) * scaleY);
+                    }
                 });
 
                 interactiveOverlay.appendChild(box);
             });
+
+            lucide.createIcons();
         }
 
-        // CLICK ON BLANK AREA -> Add New Text
-        interactiveOverlay.addEventListener('click', (e) => {
-            if (activeInput) {
-                commitActiveInput();
+        function findContainingLine(bbox) {
+            const [x0, y0, x1, y1] = bbox;
+            const cy = (y0 + y1) / 2;
+            for (const line of pageLines) {
+                if (cy >= line.bbox[1] - 3 && cy <= line.bbox[3] + 3) {
+                    return line;
+                }
+            }
+            return null;
+        }
+
+        // -------------------------------------------------------------
+        // Global Find & Replace Feature
+        // -------------------------------------------------------------
+        findReplaceToggleBtn.addEventListener('click', () => {
+            if (findReplaceModal.classList.contains('hidden')) {
+                openFindReplaceModal();
+            } else {
+                closeFindReplaceModal();
+            }
+        });
+
+        function openFindReplaceModal() {
+            findReplaceModal.classList.remove('hidden');
+            setTimeout(() => {
+                findSearchInput.focus();
+                findSearchInput.select();
+                if (findSearchInput.value) {
+                    triggerSearch();
+                }
+            }, 50);
+        }
+
+        function closeFindReplaceModal() {
+            findReplaceModal.classList.add('hidden');
+            clearSearchHighlights();
+        }
+
+        findCloseBtn.addEventListener('click', closeFindReplaceModal);
+
+        // Global hotkey: Cmd+F or Ctrl+F
+        window.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+                e.preventDefault();
+                openFindReplaceModal();
+            }
+        });
+
+        findSearchInput.addEventListener('input', () => {
+            clearTimeout(searchDebounceTimer);
+            searchDebounceTimer = setTimeout(triggerSearch, 250);
+        });
+
+        findSearchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                if (e.shiftKey) {
+                    goToPrevMatch();
+                } else {
+                    goToNextMatch();
+                }
+            }
+        });
+
+        async function triggerSearch() {
+            const query = findSearchInput.value.trim();
+            if (!query) {
+                searchResults = [];
+                flatMatches = [];
+                currentMatchIndex = -1;
+                findMatchesCountBadge.innerText = '0 matches';
+                clearSearchHighlights();
                 return;
             }
 
-            const rect = interactiveOverlay.getBoundingClientRect();
-            const clickX = e.clientX - rect.left;
-            const clickY = e.clientY - rect.top;
+            try {
+                const res = await fetch('/api/search', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query: query })
+                });
+                const data = await res.json();
+                searchResults = data.results || [];
+                
+                flatMatches = [];
+                searchResults.forEach(r => {
+                    r.matches.forEach(m => flatMatches.push(m));
+                });
+
+                if (flatMatches.length > 0) {
+                    currentMatchIndex = 0;
+                    findMatchesCountBadge.innerText = `${currentMatchIndex + 1} of ${flatMatches.length} matches`;
+                    
+                    // If first match is on a different page, load it
+                    if (flatMatches[0].page_index !== currentPageIndex) {
+                        await loadPage(flatMatches[0].page_index);
+                    } else {
+                        renderSearchHighlights();
+                    }
+                } else {
+                    currentMatchIndex = -1;
+                    findMatchesCountBadge.innerText = '0 matches';
+                    clearSearchHighlights();
+                }
+            } catch (err) {
+                console.error('Search error:', err);
+            }
+        }
+
+        function renderSearchHighlights() {
+            searchHighlightsLayer.innerHTML = '';
+            if (flatMatches.length === 0) return;
 
             const scaleX = pdfPageImage.clientWidth / originalPageWidth;
             const scaleY = pdfPageImage.clientHeight / originalPageHeight;
 
-            const pdfX = clickX / scaleX;
-            const pdfY = clickY / scaleY;
+            flatMatches.forEach((m, idx) => {
+                if (m.page_index === currentPageIndex) {
+                    const [x0, y0, x1, y1] = m.bbox;
+                    const left = x0 * scaleX;
+                    const top = y0 * scaleY;
+                    const width = (x1 - x0) * scaleX;
+                    const height = (y1 - y0) * scaleY;
 
-            const newObj = {
-                isNew: true,
-                x: pdfX,
-                y: pdfY,
-                newText: 'New Text',
-                size: 12.0,
-                color: '#1E293B',
-                font: 'helv'
-            };
+                    const mark = document.createElement('div');
+                    mark.className = `search-match-highlight ${idx === currentMatchIndex ? 'active-match' : ''}`;
+                    mark.style.left = `${left}px`;
+                    mark.style.top = `${top}px`;
+                    mark.style.width = `${width}px`;
+                    mark.style.height = `${height}px`;
 
-            openInlineEditorForNewText(newObj, clickX, clickY);
-        });
+                    searchHighlightsLayer.appendChild(mark);
 
-        function openInlineEditor(span, boxElement) {
-            closeActiveInput();
-
-            activeEditTarget = {
-                isNew: false,
-                span: span,
-                boxElement: boxElement,
-                size: span.size,
-                color: span.color,
-                font: span.font
-            };
-
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.className = 'active-inline-input';
-            input.value = span.text.trim();
-            input.style.left = boxElement.style.left;
-            input.style.top = boxElement.style.top;
-            input.style.minWidth = `${Math.max(parseFloat(boxElement.style.width) + 10, 80)}px`;
-            input.style.height = boxElement.style.height;
-            input.style.fontSize = `${activeEditTarget.size * (pdfPageImage.clientHeight / originalPageHeight)}px`;
-            input.style.color = activeEditTarget.color;
-
-            input.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    commitActiveInput();
-                } else if (e.key === 'Escape') {
-                    closeActiveInput();
+                    if (idx === currentMatchIndex) {
+                        mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
                 }
             });
-
-            interactiveOverlay.appendChild(input);
-            input.focus();
-            input.select();
-            activeInput = input;
-
-            positionFloatingToolbar(input);
         }
 
-        function openInlineEditorForNewText(newObj, clickX, clickY) {
-            closeActiveInput();
-
-            const scaleY = pdfPageImage.clientHeight / originalPageHeight;
-            activeEditTarget = newObj;
-
-            const input = document.createElement('input');
-            input.type = 'text';
-            input.className = 'active-inline-input';
-            input.value = newObj.newText;
-            input.style.left = `${clickX}px`;
-            input.style.top = `${clickY}px`;
-            input.style.minWidth = `120px`;
-            input.style.fontSize = `${newObj.size * scaleY}px`;
-            input.style.color = newObj.color;
-
-            input.addEventListener('keydown', (e) => {
-                if (e.key === 'Enter') {
-                    commitActiveInput();
-                } else if (e.key === 'Escape') {
-                    closeActiveInput();
-                }
-            });
-
-            interactiveOverlay.appendChild(input);
-            input.focus();
-            input.select();
-            activeInput = input;
-
-            positionFloatingToolbar(input);
+        function clearSearchHighlights() {
+            searchHighlightsLayer.innerHTML = '';
         }
 
-        function positionFloatingToolbar(inputEl) {
-            floatingToolbar.classList.remove('hidden');
-            const rect = inputEl.getBoundingClientRect();
-            const wrapperRect = pageWrapper.getBoundingClientRect();
+        async function goToNextMatch() {
+            if (flatMatches.length === 0) return;
+            currentMatchIndex = (currentMatchIndex + 1) % flatMatches.length;
+            findMatchesCountBadge.innerText = `${currentMatchIndex + 1} of ${flatMatches.length} matches`;
 
-            let toolLeft = rect.left - wrapperRect.left;
-            let toolTop = rect.top - wrapperRect.top - 46;
-
-            if (toolTop < 0) toolTop = rect.bottom - wrapperRect.top + 8;
-
-            floatingToolbar.style.left = `${toolLeft}px`;
-            floatingToolbar.style.top = `${toolTop}px`;
-
-            fontSizeDisplay.innerText = `${activeEditTarget.size.toFixed(1)}pt`;
-            colorPicker.value = activeEditTarget.color.length === 7 ? activeEditTarget.color : '#000000';
-            pageWrapper.appendChild(floatingToolbar);
-        }
-
-        function closeActiveInput() {
-            if (activeInput) {
-                activeInput.remove();
-                activeInput = null;
-            }
-            floatingToolbar.classList.add('hidden');
-            activeEditTarget = null;
-        }
-
-        // COMMIT & IMMEDIATELY RE-RENDER FROM SERVER
-        async function commitActiveInput() {
-            if (!activeInput || !activeEditTarget) return;
-
-            const val = activeInput.value;
-            if (val === '') {
-                closeActiveInput();
-                return;
-            }
-
-            // Guard: If editing existing text and nothing changed, abort silently
-            if (!activeEditTarget.isNew && val.trim() === activeEditTarget.span.text.trim()) {
-                closeActiveInput();
-                return;
-            }
-
-            // Guard: If clicking blank area and leaving placeholder unchanged, abort silently
-            if (activeEditTarget.isNew && (val === 'New Text' || val.trim() === '')) {
-                closeActiveInput();
-                return;
-            }
-
-            liveStatusMsg.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Applying Clean Vector Edit...';
-            lucide.createIcons();
-
-            let editPayload = null;
-
-            if (activeEditTarget.isNew) {
-                editPayload = {
-                    type: 'add',
-                    page_index: currentPageIndex,
-                    x: activeEditTarget.x,
-                    y: activeEditTarget.y,
-                    newText: val.trim(),
-                    size: activeEditTarget.size,
-                    color: activeEditTarget.color
-                };
+            const targetMatch = flatMatches[currentMatchIndex];
+            if (targetMatch.page_index !== currentPageIndex) {
+                await loadPage(targetMatch.page_index);
             } else {
-                editPayload = {
-                    type: 'replace',
-                    page_index: currentPageIndex,
-                    bbox: activeEditTarget.span.bbox,
-                    oldText: activeEditTarget.span.text,
-                    newText: val.trim(),
-                    size: activeEditTarget.size,
-                    color: activeEditTarget.color,
-                    font: activeEditTarget.span.font,
-                    flags: activeEditTarget.span.flags || 0
-                };
+                renderSearchHighlights();
             }
+        }
+
+        async function goToPrevMatch() {
+            if (flatMatches.length === 0) return;
+            currentMatchIndex = (currentMatchIndex - 1 + flatMatches.length) % flatMatches.length;
+            findMatchesCountBadge.innerText = `${currentMatchIndex + 1} of ${flatMatches.length} matches`;
+
+            const targetMatch = flatMatches[currentMatchIndex];
+            if (targetMatch.page_index !== currentPageIndex) {
+                await loadPage(targetMatch.page_index);
+            } else {
+                renderSearchHighlights();
+            }
+        }
+
+        findNextBtn.addEventListener('click', goToNextMatch);
+        findPrevBtn.addEventListener('click', goToPrevMatch);
+
+        // Replace Single Next Match
+        findReplaceCurrentBtn.addEventListener('click', async () => {
+            if (flatMatches.length === 0 || currentMatchIndex < 0) return;
+            const targetMatch = flatMatches[currentMatchIndex];
+            const searchTxt = findSearchInput.value.trim();
+            const replaceTxt = findReplaceInput.value.trim();
+
+            if (!searchTxt) return;
+
+            setStatus('Replacing occurrence with anti-overlap reflow...', 'loading');
+
+            const payload = {
+                type: 'replace',
+                page_index: targetMatch.page_index,
+                bbox: targetMatch.bbox,
+                oldText: searchTxt,
+                newText: replaceTxt,
+                reflow: findReflowToggle.checked
+            };
 
             try {
                 const res = await fetch('/api/apply_edit', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(editPayload)
+                    body: JSON.stringify(payload)
                 });
                 const resData = await res.json();
-
                 if (resData.status === 'success') {
-                    // Update the image immediately! The user sees the change reflected live on the PDF!
                     renderPageData(resData.data);
-                    liveStatusMsg.innerHTML = '<i data-lucide="check-circle" class="w-3.5 h-3.5 text-emerald-600"></i> Edit Applied to PostScript Stream!';
-                    lucide.createIcons();
+                    setStatus('Replaced 1 occurrence cleanly!', 'success');
+                    await triggerSearch();
                 } else {
-                    alert('Error applying edit: ' + resData.message);
+                    alert('Error replacing: ' + resData.message);
                 }
             } catch (err) {
                 alert('Network error: ' + err.message);
-            } finally {
-                closeActiveInput();
-            }
-        }
-
-        // Toolbar controls
-        sizeMinusBtn.addEventListener('click', () => {
-            if (activeEditTarget) {
-                activeEditTarget.size = Math.max(activeEditTarget.size - 0.5, 6);
-                fontSizeDisplay.innerText = `${activeEditTarget.size.toFixed(1)}pt`;
-                if (activeInput) {
-                    activeInput.style.fontSize = `${activeEditTarget.size * (pdfPageImage.clientHeight / originalPageHeight)}px`;
-                }
             }
         });
 
-        sizePlusBtn.addEventListener('click', () => {
-            if (activeEditTarget) {
-                activeEditTarget.size = Math.min(activeEditTarget.size + 0.5, 72);
-                fontSizeDisplay.innerText = `${activeEditTarget.size.toFixed(1)}pt`;
-                if (activeInput) {
-                    activeInput.style.fontSize = `${activeEditTarget.size * (pdfPageImage.clientHeight / originalPageHeight)}px`;
-                }
-            }
-        });
+        // Replace All Everywhere
+        findReplaceAllBtn.addEventListener('click', async () => {
+            const searchTxt = findSearchInput.value.trim();
+            const replaceTxt = findReplaceInput.value.trim();
 
-        colorPicker.addEventListener('input', (e) => {
-            if (activeEditTarget) {
-                activeEditTarget.color = e.target.value;
-                if (activeInput) {
-                    activeInput.style.color = activeEditTarget.color;
-                }
-            }
-        });
-
-        saveEditBtn.addEventListener('click', () => {
-            commitActiveInput();
-        });
-
-        deleteTextBtn.addEventListener('click', async () => {
-            if (!activeEditTarget || activeEditTarget.isNew) {
-                closeActiveInput();
+            if (!searchTxt) {
+                alert('Please enter text to find.');
                 return;
             }
 
-            const editPayload = {
-                type: 'redact',
+            const allPages = findScopeAllPages.checked;
+            const scopeLabel = allPages ? 'across the entire PDF' : `on page ${currentPageIndex + 1}`;
+            setStatus(`Replacing all occurrences of "${searchTxt}" ${scopeLabel}...`, 'loading');
+
+            const payload = {
+                search_text: searchTxt,
+                replace_text: replaceTxt,
+                all_pages: allPages,
                 page_index: currentPageIndex,
-                bbox: activeEditTarget.span.bbox
+                reflow: findReflowToggle.checked
             };
 
-            liveStatusMsg.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Erasing...';
-            lucide.createIcons();
+            try {
+                const res = await fetch('/api/replace_all', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const resData = await res.json();
+                if (resData.status === 'success') {
+                    renderPageData(resData.data);
+                    const count = resData.total_replaced;
+                    const pages = resData.pages_affected;
+                    setStatus(`Successfully replaced ${count} occurrences across ${pages} page(s) with zero overlap!`, 'success');
+                    findMatchesCountBadge.innerText = '0 matches';
+                    clearSearchHighlights();
+                    flatMatches = [];
+                    currentMatchIndex = -1;
+                } else {
+                    alert('Error in Replace All: ' + resData.message);
+                }
+            } catch (err) {
+                alert('Network error: ' + err.message);
+            }
+        });
+
+        // -------------------------------------------------------------
+        // Text Editor Card Handling
+        // -------------------------------------------------------------
+        function openEditorForItem(item, pixelLeft, pixelTop, pixelWidth, pixelHeight) {
+            closeEditorCard();
+            closeImageCard();
+            closeAreaModal();
+
+            activeEditorTarget = {
+                isNew: false,
+                origItem: item,
+                x: item.bbox[0],
+                y: item.bbox[1],
+                origX: item.bbox[0],
+                origY: item.bbox[1],
+                text: item.text,
+                size: item.size || 12.0,
+                color: item.color || '#000000',
+                font: item.font || 'helv',
+                flags: item.flags || 0,
+                width: pixelWidth,
+                height: pixelHeight
+            };
+
+            editorCardTitle.innerText = `Edit ${activeGranularity === 'word' ? 'Word' : activeGranularity === 'line' ? 'Line' : 'Text Box'}`;
+            editorTextInput.value = item.text;
+            fontSizeVal.innerText = `${activeEditorTarget.size.toFixed(1)}pt`;
+            editorColorInput.value = (activeEditorTarget.color && activeEditorTarget.color.length === 7) ? activeEditorTarget.color : '#000000';
+            editorReflowToggle.checked = true;
+            updateFontFamilySelect(activeEditorTarget.font);
+            updateStyleButtons();
+            movedIndicator.classList.add('hidden');
+
+            let cardLeft = pixelLeft;
+            let cardTop = pixelTop + pixelHeight + 8;
+            const wrapperWidth = pageWrapper.clientWidth;
+            const wrapperHeight = pageWrapper.clientHeight;
+
+            if (cardLeft + 350 > wrapperWidth) {
+                cardLeft = Math.max(10, wrapperWidth - 360);
+            }
+            if (cardTop + 260 > wrapperHeight) {
+                cardTop = Math.max(10, pixelTop - 270);
+            }
+
+            editorCard.style.left = `${cardLeft}px`;
+            editorCard.style.top = `${cardTop}px`;
+            posCoordsBadge.innerText = `X: ${Math.round(activeEditorTarget.x)}, Y: ${Math.round(activeEditorTarget.y)}`;
+
+            pageWrapper.appendChild(editorCard);
+            editorCard.classList.remove('hidden');
+
+            ghostPlacementBox.style.left = `${pixelLeft}px`;
+            ghostPlacementBox.style.top = `${pixelTop}px`;
+            ghostPlacementBox.style.width = `${pixelWidth}px`;
+            ghostPlacementBox.style.height = `${pixelHeight}px`;
+            ghostPlacementBox.classList.remove('hidden');
+
+            setTimeout(() => {
+                editorTextInput.focus();
+                editorTextInput.select();
+            }, 50);
+        }
+
+        function openEditorForNewText(pdfX, pdfY, pixelLeft, pixelTop) {
+            closeEditorCard();
+            closeImageCard();
+            closeAreaModal();
+
+            activeEditorTarget = {
+                isNew: true,
+                origItem: null,
+                x: pdfX,
+                y: pdfY,
+                origX: pdfX,
+                origY: pdfY,
+                text: 'New Text',
+                size: 14.0,
+                color: '#1E293B',
+                font: 'helv',
+                flags: 0,
+                width: 120,
+                height: 24
+            };
+
+            editorCardTitle.innerText = 'Add Draggable Text';
+            editorTextInput.value = 'New Text';
+            fontSizeVal.innerText = `${activeEditorTarget.size.toFixed(1)}pt`;
+            editorColorInput.value = '#1E293B';
+            editorFontFamily.value = 'helv';
+            editorReflowToggle.checked = false;
+            updateStyleButtons();
+            movedIndicator.classList.add('hidden');
+
+            let cardLeft = pixelLeft;
+            let cardTop = pixelTop + 8;
+            const wrapperWidth = pageWrapper.clientWidth;
+            const wrapperHeight = pageWrapper.clientHeight;
+
+            if (cardLeft + 350 > wrapperWidth) {
+                cardLeft = Math.max(10, wrapperWidth - 360);
+            }
+            if (cardTop + 260 > wrapperHeight) {
+                cardTop = Math.max(10, pixelTop - 270);
+            }
+
+            editorCard.style.left = `${cardLeft}px`;
+            editorCard.style.top = `${cardTop}px`;
+            posCoordsBadge.innerText = `X: ${Math.round(pdfX)}, Y: ${Math.round(pdfY)}`;
+
+            pageWrapper.appendChild(editorCard);
+            editorCard.classList.remove('hidden');
+
+            ghostPlacementBox.style.left = `${pixelLeft}px`;
+            ghostPlacementBox.style.top = `${pixelTop}px`;
+            ghostPlacementBox.style.width = `120px`;
+            ghostPlacementBox.style.height = `24px`;
+            ghostPlacementBox.classList.remove('hidden');
+
+            setTimeout(() => {
+                editorTextInput.focus();
+                editorTextInput.select();
+            }, 50);
+        }
+
+        function updateFontFamilySelect(fontStr) {
+            const f = (fontStr || '').toLowerCase();
+            if (f.includes('times') || f.includes('roman') || f.includes('serif')) {
+                editorFontFamily.value = 'times';
+            } else if (f.includes('courier') || f.includes('mono') || f.includes('dejavu')) {
+                editorFontFamily.value = 'courier';
+            } else {
+                editorFontFamily.value = 'helv';
+            }
+        }
+
+        function updateStyleButtons() {
+            if (!activeEditorTarget) return;
+            const isBold = Boolean(activeEditorTarget.flags & 2);
+            const isItalic = Boolean(activeEditorTarget.flags & 1);
+
+            if (isBold) {
+                styleBoldBtn.classList.add('bg-blue-600', 'text-white');
+            } else {
+                styleBoldBtn.classList.remove('bg-blue-600', 'text-white');
+            }
+
+            if (isItalic) {
+                styleItalicBtn.classList.add('bg-blue-600', 'text-white');
+            } else {
+                styleItalicBtn.classList.remove('bg-blue-600', 'text-white');
+            }
+        }
+
+        function closeEditorCard() {
+            editorCard.classList.add('hidden');
+            ghostPlacementBox.classList.add('hidden');
+            activeEditorTarget = null;
+        }
+
+        editorDragHeader.addEventListener('mousedown', (e) => {
+            if (e.target.closest('#editorCloseBtn')) return;
+            isDraggingEditor = true;
+            dragStartMouseX = e.clientX;
+            dragStartMouseY = e.clientY;
+
+            const rect = editorCard.getBoundingClientRect();
+            const wrapperRect = pageWrapper.getBoundingClientRect();
+            dragStartCardX = rect.left - wrapperRect.left;
+            dragStartCardY = rect.top - wrapperRect.top;
+
+            window.addEventListener('mousemove', onEditorMouseMove);
+            window.addEventListener('mouseup', onEditorMouseUp);
+        });
+
+        function onEditorMouseMove(e) {
+            if (!isDraggingEditor || !activeEditorTarget) return;
+
+            const deltaX = (e.clientX - dragStartMouseX) / zoomLevel;
+            const deltaY = (e.clientY - dragStartMouseY) / zoomLevel;
+
+            let newCardX = dragStartCardX + deltaX;
+            let newCardY = dragStartCardY + deltaY;
+
+            const wrapperWidth = pageWrapper.clientWidth;
+            const wrapperHeight = pageWrapper.clientHeight;
+
+            newCardX = Math.max(0, Math.min(newCardX, wrapperWidth - editorCard.clientWidth));
+            newCardY = Math.max(0, Math.min(newCardY, wrapperHeight - 60));
+
+            editorCard.style.left = `${newCardX}px`;
+            editorCard.style.top = `${newCardY}px`;
+
+            const scaleX = pdfPageImage.clientWidth / originalPageWidth;
+            const scaleY = pdfPageImage.clientHeight / originalPageHeight;
+
+            activeEditorTarget.x = newCardX / scaleX;
+            activeEditorTarget.y = newCardY / scaleY;
+
+            posCoordsBadge.innerText = `X: ${Math.round(activeEditorTarget.x)}, Y: ${Math.round(activeEditorTarget.y)}`;
+
+            ghostPlacementBox.style.left = `${newCardX}px`;
+            ghostPlacementBox.style.top = `${newCardY}px`;
+
+            if (Math.abs(activeEditorTarget.x - activeEditorTarget.origX) > 2 || Math.abs(activeEditorTarget.y - activeEditorTarget.origY) > 2) {
+                movedIndicator.classList.remove('hidden');
+            }
+        }
+
+        function onEditorMouseUp() {
+            isDraggingEditor = false;
+            window.removeEventListener('mousemove', onEditorMouseMove);
+            window.removeEventListener('mouseup', onEditorMouseUp);
+        }
+
+        window.addEventListener('keydown', (e) => {
+            if (!activeEditorTarget) return;
+            if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key) && document.activeElement !== editorTextInput) {
+                e.preventDefault();
+                const step = e.shiftKey ? 10 : 1;
+                const scaleX = pdfPageImage.clientWidth / originalPageWidth;
+                const scaleY = pdfPageImage.clientHeight / originalPageHeight;
+
+                if (e.key === 'ArrowLeft') activeEditorTarget.x = Math.max(0, activeEditorTarget.x - step);
+                if (e.key === 'ArrowRight') activeEditorTarget.x = Math.min(originalPageWidth, activeEditorTarget.x + step);
+                if (e.key === 'ArrowUp') activeEditorTarget.y = Math.max(0, activeEditorTarget.y - step);
+                if (e.key === 'ArrowDown') activeEditorTarget.y = Math.min(originalPageHeight, activeEditorTarget.y + step);
+
+                const pixelX = activeEditorTarget.x * scaleX;
+                const pixelY = activeEditorTarget.y * scaleY;
+
+                ghostPlacementBox.style.left = `${pixelX}px`;
+                ghostPlacementBox.style.top = `${pixelY}px`;
+                posCoordsBadge.innerText = `X: ${Math.round(activeEditorTarget.x)}, Y: ${Math.round(activeEditorTarget.y)}`;
+                movedIndicator.classList.remove('hidden');
+            } else if (e.key === 'Escape') {
+                closeEditorCard();
+                closeImageCard();
+                closeAreaModal();
+                closeFindReplaceModal();
+            }
+        });
+
+        sizeDecBtn.addEventListener('click', () => {
+            if (activeEditorTarget) {
+                activeEditorTarget.size = Math.max(6, activeEditorTarget.size - 0.5);
+                fontSizeVal.innerText = `${activeEditorTarget.size.toFixed(1)}pt`;
+            }
+        });
+
+        sizeIncBtn.addEventListener('click', () => {
+            if (activeEditorTarget) {
+                activeEditorTarget.size = Math.min(72, activeEditorTarget.size + 0.5);
+                fontSizeVal.innerText = `${activeEditorTarget.size.toFixed(1)}pt`;
+            }
+        });
+
+        editorFontFamily.addEventListener('change', (e) => {
+            if (activeEditorTarget) activeEditorTarget.font = e.target.value;
+        });
+
+        styleBoldBtn.addEventListener('click', () => {
+            if (activeEditorTarget) {
+                activeEditorTarget.flags = (activeEditorTarget.flags ^ 2);
+                updateStyleButtons();
+            }
+        });
+
+        styleItalicBtn.addEventListener('click', () => {
+            if (activeEditorTarget) {
+                activeEditorTarget.flags = (activeEditorTarget.flags ^ 1);
+                updateStyleButtons();
+            }
+        });
+
+        editorColorInput.addEventListener('input', (e) => {
+            if (activeEditorTarget) activeEditorTarget.color = e.target.value;
+        });
+
+        editorCloseBtn.addEventListener('click', closeEditorCard);
+        editorCancelBtn.addEventListener('click', closeEditorCard);
+
+        editorApplyBtn.addEventListener('click', commitActiveEditor);
+        editorTextInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                commitActiveEditor();
+            }
+        });
+
+        async function commitActiveEditor() {
+            if (!activeEditorTarget) return;
+
+            const newTextVal = editorTextInput.value.trim();
+            if (!newTextVal) {
+                closeEditorCard();
+                return;
+            }
+
+            const isPositionChanged = (
+                Math.abs(activeEditorTarget.x - activeEditorTarget.origX) > 1 ||
+                Math.abs(activeEditorTarget.y - activeEditorTarget.origY) > 1
+            );
+
+            if (!activeEditorTarget.isNew && newTextVal === activeEditorTarget.origItem.text && !isPositionChanged) {
+                closeEditorCard();
+                return;
+            }
+
+            setStatus('Reflowing & applying clean edit...', 'loading');
+
+            let payload = null;
+
+            if (activeEditorTarget.isNew) {
+                payload = {
+                    type: 'add',
+                    page_index: currentPageIndex,
+                    newText: newTextVal,
+                    x: activeEditorTarget.x,
+                    y: activeEditorTarget.y,
+                    size: activeEditorTarget.size,
+                    color: activeEditorTarget.color,
+                    font: activeEditorTarget.font,
+                    flags: activeEditorTarget.flags
+                };
+            } else {
+                payload = {
+                    type: isPositionChanged ? 'move' : 'replace',
+                    page_index: currentPageIndex,
+                    bbox: activeEditorTarget.origItem.bbox,
+                    oldText: activeEditorTarget.origItem.text,
+                    newText: newTextVal,
+                    size: activeEditorTarget.size,
+                    color: activeEditorTarget.color,
+                    font: activeEditorTarget.font,
+                    flags: activeEditorTarget.flags,
+                    reflow: editorReflowToggle.checked
+                };
+                if (isPositionChanged) {
+                    payload.new_x = activeEditorTarget.x;
+                    payload.new_y = activeEditorTarget.y;
+                }
+            }
+
+            closeEditorCard();
 
             try {
                 const res = await fetch('/api/apply_edit', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(editPayload)
+                    body: JSON.stringify(payload)
+                });
+                const resData = await res.json();
+
+                if (resData.status === 'success') {
+                    renderPageData(resData.data);
+                    setStatus('Edit applied seamlessly with anti-overlap reflow!', 'success');
+                } else {
+                    alert('Error applying edit: ' + resData.message);
+                    setStatus('Error applying edit', 'error');
+                }
+            } catch (err) {
+                alert('Network error: ' + err.message);
+                setStatus('Network error', 'error');
+            }
+        }
+
+        editorEraseBtn.addEventListener('click', async () => {
+            if (!activeEditorTarget) return;
+            if (activeEditorTarget.isNew) {
+                closeEditorCard();
+                return;
+            }
+
+            setStatus('Erasing text...', 'loading');
+            const payload = {
+                type: 'redact',
+                page_index: currentPageIndex,
+                bbox: activeEditorTarget.origItem.bbox
+            };
+
+            closeEditorCard();
+
+            try {
+                const res = await fetch('/api/apply_edit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
                 });
                 const resData = await res.json();
                 if (resData.status === 'success') {
                     renderPageData(resData.data);
-                    liveStatusMsg.innerHTML = '<i data-lucide="check-circle" class="w-3.5 h-3.5 text-emerald-600"></i> Text Erased Cleanly!';
-                    lucide.createIcons();
+                    setStatus('Text erased cleanly!', 'success');
+                } else {
+                    alert('Erase error: ' + resData.message);
                 }
             } catch (err) {
-                alert('Erase failed: ' + err.message);
-            } finally {
-                closeActiveInput();
+                alert('Network error: ' + err.message);
             }
         });
 
-        // Pagination
-        prevPageBtn.addEventListener('click', () => {
-            if (currentPageIndex > 0) loadPage(currentPageIndex - 1);
-        });
-        nextPageBtn.addEventListener('click', () => {
-            if (currentPageIndex < totalPages - 1) loadPage(currentPageIndex + 1);
+        // -------------------------------------------------------------
+        // Image Inspector & Replacement Card
+        // -------------------------------------------------------------
+        function openImageInspector(img, pixelLeft, pixelTop, pixelWidth, pixelHeight) {
+            closeEditorCard();
+            closeImageCard();
+            closeAreaModal();
+
+            activeImageTarget = {
+                img: img,
+                origWidth: img.width,
+                origHeight: img.height,
+                targetWidth: img.width,
+                targetHeight: img.height,
+                pixelLeft: pixelLeft,
+                pixelTop: pixelTop
+            };
+
+            newImageBase64 = null;
+            newImageNaturalRatio = img.height / max1(img.width);
+
+            imgDimensionsBadge.innerText = `${Math.round(img.width)}×${Math.round(img.height)} pt`;
+            imgTargetWidth.value = Math.round(img.width);
+            imgTargetHeight.value = Math.round(img.height);
+            imgDeltaIndicator.innerText = 'Δy: 0 pt';
+            imgDeltaIndicator.className = 'text-[10px] font-mono text-slate-400';
+            imgPixelInfo.innerText = `Original: ${img.pixel_width || '?'}×${img.pixel_height || '?'} px`;
+            imgPreviewThumb.innerHTML = `<i data-lucide="image" class="w-6 h-6 text-purple-400"></i>`;
+            imgReflowToggle.checked = true;
+
+            let cardLeft = pixelLeft;
+            let cardTop = pixelTop + pixelHeight + 8;
+            const wrapperWidth = pageWrapper.clientWidth;
+            const wrapperHeight = pageWrapper.clientHeight;
+
+            if (cardLeft + 350 > wrapperWidth) {
+                cardLeft = Math.max(10, wrapperWidth - 360);
+            }
+            if (cardTop + 320 > wrapperHeight) {
+                cardTop = Math.max(10, pixelTop - 330);
+            }
+
+            imageCard.style.left = `${cardLeft}px`;
+            imageCard.style.top = `${cardTop}px`;
+
+            pageWrapper.appendChild(imageCard);
+            imageCard.classList.remove('hidden');
+            lucide.createIcons();
+        }
+
+        function max1(v) {
+            return v > 0 ? v : 1;
+        }
+
+        function closeImageCard() {
+            imageCard.classList.add('hidden');
+            activeImageTarget = null;
+            newImageBase64 = null;
+        }
+
+        imageCloseBtn.addEventListener('click', closeImageCard);
+        imgCancelBtn.addEventListener('click', closeImageCard);
+
+        imageDragHeader.addEventListener('mousedown', (e) => {
+            if (e.target.closest('#imageCloseBtn')) return;
+            isDraggingImageCard = true;
+            dragStartMouseX = e.clientX;
+            dragStartMouseY = e.clientY;
+
+            const rect = imageCard.getBoundingClientRect();
+            const wrapperRect = pageWrapper.getBoundingClientRect();
+            dragStartImgCardX = rect.left - wrapperRect.left;
+            dragStartImgCardY = rect.top - wrapperRect.top;
+
+            window.addEventListener('mousemove', onImgCardMouseMove);
+            window.addEventListener('mouseup', onImgCardMouseUp);
         });
 
-        // Zoom
+        function onImgCardMouseMove(e) {
+            if (!isDraggingImageCard) return;
+
+            const deltaX = (e.clientX - dragStartMouseX) / zoomLevel;
+            const deltaY = (e.clientY - dragStartMouseY) / zoomLevel;
+
+            let newCardX = dragStartImgCardX + deltaX;
+            let newCardY = dragStartImgCardY + deltaY;
+
+            const wrapperWidth = pageWrapper.clientWidth;
+            const wrapperHeight = pageWrapper.clientHeight;
+
+            newCardX = Math.max(0, Math.min(newCardX, wrapperWidth - imageCard.clientWidth));
+            newCardY = Math.max(0, Math.min(newCardY, wrapperHeight - 60));
+
+            imageCard.style.left = `${newCardX}px`;
+            imageCard.style.top = `${newCardY}px`;
+        }
+
+        function onImgCardMouseUp() {
+            isDraggingImageCard = false;
+            window.removeEventListener('mousemove', onImgCardMouseMove);
+            window.removeEventListener('mouseup', onImgCardMouseUp);
+        }
+
+        replaceImageFileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = () => {
+                newImageBase64 = reader.result;
+
+                const imgObj = new Image();
+                imgObj.onload = () => {
+                    const natW = imgObj.naturalWidth;
+                    const natH = imgObj.naturalHeight;
+                    newImageNaturalRatio = natH / max1(natW);
+
+                    imgPixelInfo.innerText = `New: ${natW}×${natH} px (${file.type.split('/')[1].toUpperCase()})`;
+                    imgPreviewThumb.innerHTML = `<img src="${newImageBase64}" class="w-full h-full object-cover">`;
+
+                    const currentW = parseFloat(imgTargetWidth.value) || activeImageTarget.origWidth;
+                    const computedH = Math.round(currentW * newImageNaturalRatio);
+                    imgTargetHeight.value = computedH;
+
+                    updateImageDeltaDisplay();
+                };
+                imgObj.src = newImageBase64;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        imgTargetWidth.addEventListener('input', () => {
+            if (imgLockAspect.checked) {
+                const w = parseFloat(imgTargetWidth.value) || 0;
+                imgTargetHeight.value = Math.round(w * newImageNaturalRatio);
+            }
+            updateImageDeltaDisplay();
+        });
+
+        imgTargetHeight.addEventListener('input', () => {
+            if (imgLockAspect.checked) {
+                const h = parseFloat(imgTargetHeight.value) || 0;
+                imgTargetWidth.value = Math.round(h / max1(newImageNaturalRatio));
+            }
+            updateImageDeltaDisplay();
+        });
+
+        function updateImageDeltaDisplay() {
+            if (!activeImageTarget) return;
+            const newH = parseFloat(imgTargetHeight.value) || activeImageTarget.origHeight;
+            const deltaY = newH - activeImageTarget.origHeight;
+
+            if (deltaY > 0) {
+                imgDeltaIndicator.innerText = `Δy: +${Math.round(deltaY)} pt (Shifts down)`;
+                imgDeltaIndicator.className = 'text-[10px] font-mono text-amber-400 font-semibold';
+            } else if (deltaY < 0) {
+                imgDeltaIndicator.innerText = `Δy: ${Math.round(deltaY)} pt (Shifts up)`;
+                imgDeltaIndicator.className = 'text-[10px] font-mono text-blue-400 font-semibold';
+            } else {
+                imgDeltaIndicator.innerText = 'Δy: 0 pt';
+                imgDeltaIndicator.className = 'text-[10px] font-mono text-slate-400';
+            }
+        }
+
+        imgApplyBtn.addEventListener('click', async () => {
+            if (!activeImageTarget) return;
+
+            const targetW = parseFloat(imgTargetWidth.value) || activeImageTarget.origWidth;
+            const targetH = parseFloat(imgTargetHeight.value) || activeImageTarget.origHeight;
+            const doReflow = imgReflowToggle.checked;
+
+            if (!newImageBase64 && Math.abs(targetH - activeImageTarget.origHeight) < 1 && Math.abs(targetW - activeImageTarget.origWidth) < 1) {
+                closeImageCard();
+                return;
+            }
+
+            setStatus('Replacing image & reflowing content below...', 'loading');
+
+            const payload = {
+                type: 'replace_image',
+                page_index: currentPageIndex,
+                bbox: activeImageTarget.img.bbox,
+                image_base64: newImageBase64 || '',
+                target_width: targetW,
+                target_height: targetH,
+                reflow: doReflow
+            };
+
+            closeImageCard();
+
+            try {
+                const res = await fetch('/api/apply_edit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const resData = await res.json();
+
+                if (resData.status === 'success') {
+                    renderPageData(resData.data);
+                    setStatus('Image replaced & content below shifted with zero overlap!', 'success');
+                } else {
+                    alert('Error replacing image: ' + resData.message);
+                    setStatus('Error replacing image', 'error');
+                }
+            } catch (err) {
+                alert('Network error: ' + err.message);
+                setStatus('Network error', 'error');
+            }
+        });
+
+        imgDeleteBtn.addEventListener('click', async () => {
+            if (!activeImageTarget) return;
+
+            setStatus('Deleting image & shifting content upward...', 'loading');
+
+            const payload = {
+                type: 'delete_image',
+                page_index: currentPageIndex,
+                bbox: activeImageTarget.img.bbox,
+                reflow: imgReflowToggle.checked
+            };
+
+            closeImageCard();
+
+            try {
+                const res = await fetch('/api/apply_edit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const resData = await res.json();
+                if (resData.status === 'success') {
+                    renderPageData(resData.data);
+                    setStatus('Image deleted & content shifted upward cleanly!', 'success');
+                } else {
+                    alert('Error deleting image: ' + resData.message);
+                }
+            } catch (err) {
+                alert('Network error: ' + err.message);
+            }
+        });
+
+        // -------------------------------------------------------------
+        // Canvas Click Handlers
+        // -------------------------------------------------------------
+        interactiveOverlay.addEventListener('click', (e) => {
+            if (activeTool === 'pan' || activeTool === 'eraseArea') return;
+
+            const rect = pageWrapper.getBoundingClientRect();
+            const clickPixelX = (e.clientX - rect.left) / zoomLevel;
+            const clickPixelY = (e.clientY - rect.top) / zoomLevel;
+
+            const scaleX = pdfPageImage.clientWidth / originalPageWidth;
+            const scaleY = pdfPageImage.clientHeight / originalPageHeight;
+
+            const pdfX = clickPixelX / scaleX;
+            const pdfY = clickPixelY / scaleY;
+
+            if (activeTool === 'addText' || e.target === interactiveOverlay) {
+                openEditorForNewText(pdfX, pdfY, clickPixelX, clickPixelY);
+            }
+        });
+
+        // -------------------------------------------------------------
+        // Area Selection / Marquee Tool
+        // -------------------------------------------------------------
+        interactiveOverlay.addEventListener('mousedown', (e) => {
+            if (activeTool !== 'eraseArea') return;
+
+            isMarqueeActive = true;
+            const rect = pageWrapper.getBoundingClientRect();
+            marqueeStartX = (e.clientX - rect.left) / zoomLevel;
+            marqueeStartY = (e.clientY - rect.top) / zoomLevel;
+
+            selectionMarquee.style.left = `${marqueeStartX}px`;
+            selectionMarquee.style.top = `${marqueeStartY}px`;
+            selectionMarquee.style.width = '0px';
+            selectionMarquee.style.height = '0px';
+            selectionMarquee.classList.remove('hidden');
+
+            window.addEventListener('mousemove', onMarqueeMouseMove);
+            window.addEventListener('mouseup', onMarqueeMouseUp);
+        });
+
+        function onMarqueeMouseMove(e) {
+            if (!isMarqueeActive) return;
+
+            const rect = pageWrapper.getBoundingClientRect();
+            const currentX = (e.clientX - rect.left) / zoomLevel;
+            const currentY = (e.clientY - rect.top) / zoomLevel;
+
+            const left = Math.min(marqueeStartX, currentX);
+            const top = Math.min(marqueeStartY, currentY);
+            const width = Math.abs(currentX - marqueeStartX);
+            const height = Math.abs(currentY - marqueeStartY);
+
+            selectionMarquee.style.left = `${left}px`;
+            selectionMarquee.style.top = `${top}px`;
+            selectionMarquee.style.width = `${width}px`;
+            selectionMarquee.style.height = `${height}px`;
+        }
+
+        function onMarqueeMouseUp(e) {
+            if (!isMarqueeActive) return;
+            isMarqueeActive = false;
+            window.removeEventListener('mousemove', onMarqueeMouseMove);
+            window.removeEventListener('mouseup', onMarqueeMouseUp);
+
+            const rect = pageWrapper.getBoundingClientRect();
+            const currentX = (e.clientX - rect.left) / zoomLevel;
+            const currentY = (e.clientY - rect.top) / zoomLevel;
+
+            const left = Math.min(marqueeStartX, currentX);
+            const top = Math.min(marqueeStartY, currentY);
+            const width = Math.abs(currentX - marqueeStartX);
+            const height = Math.abs(currentY - marqueeStartY);
+
+            if (width < 10 || height < 10) {
+                selectionMarquee.classList.add('hidden');
+                return;
+            }
+
+            const scaleX = pdfPageImage.clientWidth / originalPageWidth;
+            const scaleY = pdfPageImage.clientHeight / originalPageHeight;
+
+            marqueeRect = [
+                left / scaleX,
+                top / scaleY,
+                (left + width) / scaleX,
+                (top + height) / scaleY
+            ];
+
+            areaActionModal.style.left = `${Math.min(left + width + 10, pageWrapper.clientWidth - 220)}px`;
+            areaActionModal.style.top = `${top}px`;
+            pageWrapper.appendChild(areaActionModal);
+            areaActionModal.classList.remove('hidden');
+        }
+
+        function closeAreaModal() {
+            areaActionModal.classList.add('hidden');
+            selectionMarquee.classList.add('hidden');
+            marqueeRect = null;
+        }
+
+        areaCancelBtn.addEventListener('click', closeAreaModal);
+
+        areaWhiteoutConfirmBtn.addEventListener('click', async () => {
+            if (!marqueeRect) return;
+
+            setStatus('Whiting out selected region...', 'loading');
+            const payload = {
+                type: 'redact',
+                page_index: currentPageIndex,
+                bbox: marqueeRect
+            };
+
+            closeAreaModal();
+
+            try {
+                const res = await fetch('/api/apply_edit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const resData = await res.json();
+                if (resData.status === 'success') {
+                    renderPageData(resData.data);
+                    setStatus('Area whiteout applied cleanly!', 'success');
+                } else {
+                    alert('Whiteout error: ' + resData.message);
+                }
+            } catch (err) {
+                alert('Network error: ' + err.message);
+            }
+        });
+
+        // -------------------------------------------------------------
+        // Pan / Hand Tool & Spacebar Panning
+        // -------------------------------------------------------------
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && document.activeElement !== editorTextInput && document.activeElement !== findSearchInput && document.activeElement !== findReplaceInput && !spacePressed) {
+                spacePressed = true;
+                viewportContainer.classList.add('cursor-grab');
+            }
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.code === 'Space') {
+                spacePressed = false;
+                viewportContainer.classList.remove('cursor-grab', 'cursor-grabbing');
+            }
+        });
+
+        viewportContainer.addEventListener('mousedown', (e) => {
+            if (activeTool === 'pan' || spacePressed) {
+                isPanning = true;
+                panStartX = e.clientX;
+                panStartY = e.clientY;
+                panScrollLeft = viewportContainer.scrollLeft;
+                panScrollTop = viewportContainer.scrollTop;
+                viewportContainer.classList.add('cursor-grabbing');
+            }
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isPanning) return;
+            const dx = e.clientX - panStartX;
+            const dy = e.clientY - panStartY;
+            viewportContainer.scrollLeft = panScrollLeft - dx;
+            viewportContainer.scrollTop = panScrollTop - dy;
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (isPanning) {
+                isPanning = false;
+                viewportContainer.classList.remove('cursor-grabbing');
+            }
+        });
+
+        // -------------------------------------------------------------
+        // Mode Switches & Granularity Toggles
+        // -------------------------------------------------------------
+        function setActiveTool(tool) {
+            activeTool = tool;
+            [toolSelectBtn, toolAddTextBtn, toolEraseAreaBtn, toolPanBtn].forEach(btn => btn.classList.remove('active'));
+
+            if (tool === 'select') {
+                toolSelectBtn.classList.add('active');
+                interactiveOverlay.style.cursor = 'pointer';
+                modeDescription.innerHTML = '<i data-lucide="mouse-pointer" class="w-3.5 h-3.5 text-blue-400"></i><span><strong>Click any word, text box, or image</strong> to edit. Expanding content automatically shifts subsequent words & lower paragraphs!</span>';
+            } else if (tool === 'addText') {
+                toolAddTextBtn.classList.add('active');
+                interactiveOverlay.style.cursor = 'crosshair';
+                modeDescription.innerHTML = '<i data-lucide="plus-circle" class="w-3.5 h-3.5 text-emerald-400"></i><span><strong>Click anywhere on the PDF</strong> to place a new draggable text box.</span>';
+            } else if (tool === 'eraseArea') {
+                toolEraseAreaBtn.classList.add('active');
+                interactiveOverlay.style.cursor = 'crosshair';
+                modeDescription.innerHTML = '<i data-lucide="square-dashed" class="w-3.5 h-3.5 text-rose-400"></i><span><strong>Click and drag a rectangle</strong> over any section to whiteout / erase it.</span>';
+            } else if (tool === 'pan') {
+                toolPanBtn.classList.add('active');
+                interactiveOverlay.style.cursor = 'grab';
+                modeDescription.innerHTML = '<i data-lucide="hand" class="w-3.5 h-3.5 text-slate-300"></i><span><strong>Click and drag</strong> to pan around the page canvas.</span>';
+            }
+
+            lucide.createIcons();
+            rebuildInteractiveOverlay();
+        }
+
+        toolSelectBtn.addEventListener('click', () => setActiveTool('select'));
+        toolAddTextBtn.addEventListener('click', () => setActiveTool('addText'));
+        toolEraseAreaBtn.addEventListener('click', () => setActiveTool('eraseArea'));
+        toolPanBtn.addEventListener('click', () => setActiveTool('pan'));
+
+        function setGranularity(gran) {
+            activeGranularity = gran;
+            [granWordBtn, granLineBtn, granBlockBtn].forEach(btn => btn.classList.remove('active'));
+
+            if (gran === 'word') {
+                granWordBtn.classList.add('active');
+            } else if (gran === 'line') {
+                granLineBtn.classList.add('active');
+            } else if (gran === 'block') {
+                granBlockBtn.classList.add('active');
+            }
+
+            if (activeTool !== 'select') {
+                setActiveTool('select');
+            } else {
+                rebuildInteractiveOverlay();
+            }
+        }
+
+        granWordBtn.addEventListener('click', () => setGranularity('word'));
+        granLineBtn.addEventListener('click', () => setGranularity('line'));
+        granBlockBtn.addEventListener('click', () => setGranularity('block'));
+
+        // -------------------------------------------------------------
+        // Undo / Redo
+        // -------------------------------------------------------------
+        undoBtn.addEventListener('click', async () => {
+            setStatus('Undoing edit...', 'loading');
+            try {
+                const res = await fetch('/api/undo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ page_index: currentPageIndex })
+                });
+                const resData = await res.json();
+                if (resData.status === 'success') {
+                    renderPageData(resData.data);
+                    setStatus('Undone', 'success');
+                }
+            } catch (err) {
+                alert('Undo error: ' + err.message);
+            }
+        });
+
+        redoBtn.addEventListener('click', async () => {
+            setStatus('Redoing edit...', 'loading');
+            try {
+                const res = await fetch('/api/redo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ page_index: currentPageIndex })
+                });
+                const resData = await res.json();
+                if (resData.status === 'success') {
+                    renderPageData(resData.data);
+                    setStatus('Redone', 'success');
+                }
+            } catch (err) {
+                alert('Redo error: ' + err.message);
+            }
+        });
+
+        window.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+                e.preventDefault();
+                if (e.shiftKey) {
+                    if (!redoBtn.disabled) redoBtn.click();
+                } else {
+                    if (!undoBtn.disabled) undoBtn.click();
+                }
+            } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+                e.preventDefault();
+                if (!redoBtn.disabled) redoBtn.click();
+            }
+        });
+
+        // -------------------------------------------------------------
+        // Zoom & Pagination
+        // -------------------------------------------------------------
         zoomInBtn.addEventListener('click', () => {
-            zoomLevel = Math.min(zoomLevel + 0.15, 2.0);
+            zoomLevel = Math.min(zoomLevel + 0.15, 2.5);
             applyZoom();
         });
+
         zoomOutBtn.addEventListener('click', () => {
-            zoomLevel = Math.max(zoomLevel - 0.15, 0.6);
+            zoomLevel = Math.max(zoomLevel - 0.15, 0.4);
             applyZoom();
         });
+
+        zoomResetBtn.addEventListener('click', () => {
+            zoomLevel = 1.0;
+            applyZoom();
+        });
+
+        fitWidthBtn.addEventListener('click', () => {
+            const containerWidth = viewportContainer.clientWidth - 80;
+            zoomLevel = containerWidth / pageWrapper.clientWidth;
+            applyZoom();
+        });
+
+        viewportContainer.addEventListener('wheel', (e) => {
+            if (e.ctrlKey || e.metaKey) {
+                e.preventDefault();
+                const delta = e.deltaY < 0 ? 0.1 : -0.1;
+                zoomLevel = Math.min(Math.max(zoomLevel + delta, 0.4), 2.5);
+                applyZoom();
+            }
+        }, { passive: false });
 
         function applyZoom() {
             pageWrapper.style.transform = `scale(${zoomLevel})`;
             zoomLabel.innerText = `${Math.round(zoomLevel * 100)}%`;
         }
 
-        // Upload custom PDF
+        prevPageBtn.addEventListener('click', () => {
+            if (currentPageIndex > 0) loadPage(currentPageIndex - 1);
+        });
+
+        nextPageBtn.addEventListener('click', () => {
+            if (currentPageIndex < totalPages - 1) loadPage(currentPageIndex + 1);
+        });
+
+        // -------------------------------------------------------------
+        // Custom File Upload & Export
+        // -------------------------------------------------------------
         pdfFileInput.addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
 
-            liveStatusMsg.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i> Loading Custom PDF...';
-            lucide.createIcons();
+            setStatus('Uploading & indexing PDF...', 'loading');
 
             const reader = new FileReader();
             reader.onload = async () => {
                 const base64Data = reader.result;
-                const res = await fetch('/api/upload', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ pdf_base64: base64Data })
-                });
-                const resData = await res.json();
-                if (resData.status === 'success') {
-                    renderPageData(resData.data);
-                    liveStatusMsg.innerHTML = '<i data-lucide="check-circle" class="w-3.5 h-3.5 text-emerald-600"></i> Custom PDF Loaded!';
-                    lucide.createIcons();
-                } else {
-                    alert('Failed to load PDF: ' + resData.message);
+                try {
+                    const res = await fetch('/api/upload', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ pdf_base64: base64Data })
+                    });
+                    const resData = await res.json();
+                    if (resData.status === 'success') {
+                        renderPageData(resData.data);
+                        setStatus('Custom PDF Loaded & Indexed!', 'success');
+                    } else {
+                        alert('Failed to load PDF: ' + resData.message);
+                        setStatus('Failed to load PDF', 'error');
+                    }
+                } catch (err) {
+                    alert('Upload failed: ' + err.message);
                 }
             };
             reader.readAsDataURL(file);
         });
 
-        // Download Clean PDF
         downloadPdfBtn.addEventListener('click', async () => {
-            downloadPdfBtn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> Downloading...';
+            const origHtml = downloadPdfBtn.innerHTML;
+            downloadPdfBtn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>Exporting Clean PDF...</span>';
             lucide.createIcons();
 
             try {
@@ -590,21 +2143,40 @@
                     link.href = URL.createObjectURL(blob);
                     link.download = data.filename || 'edited_clean.pdf';
                     link.click();
+                    setStatus('Clean PDF Downloaded!', 'success');
                 } else {
                     alert('Export failed: ' + data.message);
                 }
             } catch (err) {
                 alert('Export error: ' + err.message);
             } finally {
-                downloadPdfBtn.innerHTML = '<i data-lucide="download" class="w-4 h-4"></i> Download Clean PDF';
+                downloadPdfBtn.innerHTML = origHtml;
                 lucide.createIcons();
             }
         });
 
+        function setStatus(text, type = 'info') {
+            let icon = 'check-circle';
+            let colorClass = 'text-emerald-400';
+
+            if (type === 'loading') {
+                icon = 'loader-2';
+                colorClass = 'text-blue-400 animate-spin';
+            } else if (type === 'error') {
+                icon = 'alert-circle';
+                colorClass = 'text-rose-400';
+            }
+
+            liveStatusMsg.innerHTML = `<i data-lucide="${icon}" class="w-3.5 h-3.5 ${colorClass}"></i><span>${text}</span>`;
+            lucide.createIcons();
+        }
+
         window.addEventListener('resize', () => {
             rebuildInteractiveOverlay();
+            renderSearchHighlights();
         });
 
+        // Initial Load
         loadPage(0);
     </script>
 </body>
