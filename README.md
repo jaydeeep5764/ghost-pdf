@@ -51,15 +51,34 @@ streamlit run app.py
 
 ---
 
+### 4. Universal Watermark & Steganography Remover (CLI)
+
+Sanitize any PDF or scanned image (removes text watermarks, publisher banners, laser printer tracking dots, and invisible steganography):
+
+```bash
+# Sanitize a PDF (purges watermarks, annotations, metadata, and embedded image tracking)
+python watermark_engine.py document.pdf -o document_clean.pdf
+
+# Sanitize a scanned paper or image (neutralizes yellow tracking dots & steganography)
+python watermark_engine.py scan.jpg -o scan_clean.jpg --all
+
+# Specify additional custom watermark keywords to strip:
+python watermark_engine.py paper.pdf -o paper_clean.pdf --keywords "MyWatermark" "CompanyConfidential"
+```
+
+---
+
 ## 📂 Project Architecture
 
 ```
 ghost-pdf/
-├── app.py                  # Streamlit application for side-by-side editing & inspection
+├── app.py                  # Streamlit application (Dual Mode: Editor + Universal Sanitizer)
+├── watermark_engine.py      # Universal Watermark, MIC Tracking Dot & Steganography Sanitizer
 ├── universal_engine.py      # Core typography & in-place stream replacement engine
 ├── smart_typography.py     # Font metric resolver & background color sampling
 ├── font_resolver.py        # System font locator and fallback matching
 ├── lowlevel_editor.py      # Low-level PDF stream operator rewiring
+├── test_watermark_engine.py# Comprehensive unit test suite for the sanitizer
 ├── web/
 │   ├── index.html          # Interactive HTML5/Canvas UI
 │   └── server.py           # Local HTTP server backend

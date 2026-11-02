@@ -29,6 +29,14 @@ true_stream_edit.png
 cs08_perfect_stream.pdf
 lowlevel_out.pdf
 lowlevel_patched.pdf
+verify_*.pdf
+verify_*.png
+*_clip_*.png
+comp_*.png
+sample_invoice_orig.png
+before.png
+after.png
+clip_*.png
 
 # OS artifacts
 .DS_Store

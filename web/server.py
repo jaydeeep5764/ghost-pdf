@@ -6,6 +6,7 @@ import io
 import os
 import sys
 import urllib.parse
+import re
 import pymupdf
 
 # Import the Universal PDF Engine
@@ -35,11 +36,14 @@ def get_page_payload(pdf_bytes, page_idx=0):
 
     text_data = page.get_text("dict")
     spans = []
+    blocks_payload = []
     span_id = 0
 
-    for block in text_data.get("blocks", []):
+    for b_idx, block in enumerate(text_data.get("blocks", [])):
         if "lines" in block:
+            block_lines_text = []
             for line in block["lines"]:
+                line_spans = []
                 for span in line["spans"]:
                     txt = span["text"].strip()
                     if txt:
@@ -49,16 +53,74 @@ def get_page_payload(pdf_bytes, page_idx=0):
                         b = (c_int & 0xFF)
                         hex_color = f"#{r:02x}{g:02x}{b:02x}"
                         
-                        spans.append({
+                        s_data = {
                             "id": span_id,
+                            "block_id": b_idx,
                             "text": span["text"],
                             "bbox": list(span["bbox"]),
+                            "origin": list(span["origin"]) if "origin" in span else None,
                             "font": span["font"],
                             "size": round(span["size"], 2),
                             "color": hex_color,
                             "flags": span["flags"]
-                        })
+                        }
+                        spans.append(s_data)
+                        line_spans.append(s_data)
                         span_id += 1
+                if line_spans:
+                    block_lines_text.append(" ".join(s["text"] for s in line_spans))
+
+            if block_lines_text:
+                spans_in_block = [s for l in block["lines"] for s in l.get("spans", []) if s["text"].strip()]
+                total_chars = 0
+                bold_chars = 0
+                italic_chars = 0
+                font_char_counts = {}
+                size_char_counts = {}
+                color_char_counts = {}
+
+                for s in spans_in_block:
+                    n = len(s["text"])
+                    total_chars += n
+                    f_clean = s["font"].lower()
+                    is_b = bool(s["flags"] & 16) or bool(re.search(r'[\-_ ]*(bold|heavy|black)', f_clean))
+                    is_i = bool(s["flags"] & 2) or bool(re.search(r'[\-_ ]*(italic|oblique)', f_clean))
+                    if is_b:
+                        bold_chars += n
+                    if is_i:
+                        italic_chars += n
+                    font_char_counts[s["font"]] = font_char_counts.get(s["font"], 0) + n
+                    size_char_counts[s["size"]] = size_char_counts.get(s["size"], 0) + n
+                    color_char_counts[s["color"]] = color_char_counts.get(s["color"], 0) + n
+
+                maj_font = max(font_char_counts.items(), key=lambda x: x[1])[0] if font_char_counts else "helv"
+                maj_size = round(max(size_char_counts.items(), key=lambda x: x[1])[0], 2) if size_char_counts else 10.0
+                maj_color_int = max(color_char_counts.items(), key=lambda x: x[1])[0] if color_char_counts else 0
+                r = ((maj_color_int >> 16) & 0xFF)
+                g = ((maj_color_int >> 8) & 0xFF)
+                b = (maj_color_int & 0xFF)
+                maj_color_hex = f"#{r:02x}{g:02x}{b:02x}"
+
+                is_maj_bold = (bold_chars / total_chars > 0.5) if total_chars else False
+                is_maj_italic = (italic_chars / total_chars > 0.5) if total_chars else False
+
+                b_x0 = min(s["bbox"][0] for s in spans_in_block) if spans_in_block else block["bbox"][0]
+                b_y0 = min(s["bbox"][1] for s in spans_in_block) if spans_in_block else block["bbox"][1]
+                b_x1 = max(s["bbox"][2] for s in spans_in_block) if spans_in_block else block["bbox"][2]
+                b_y1 = max(s["bbox"][3] for s in spans_in_block) if spans_in_block else block["bbox"][3]
+
+                blocks_payload.append({
+                    "id": b_idx,
+                    "bbox": [b_x0, b_y0, b_x1, b_y1],
+                    "text": "\n".join(block_lines_text),
+                    "line_count": len(block_lines_text),
+                    "font": maj_font,
+                    "size": maj_size,
+                    "flags": (16 if is_maj_bold else 0) | (2 if is_maj_italic else 0),
+                    "is_bold": is_maj_bold,
+                    "is_italic": is_maj_italic,
+                    "color": maj_color_hex
+                })
 
     payload = {
         "page_index": page_idx,
@@ -66,7 +128,8 @@ def get_page_payload(pdf_bytes, page_idx=0):
         "width": page.rect.width,
         "height": page.rect.height,
         "image": f"data:image/png;base64,{img_base64}",
-        "spans": spans
+        "spans": spans,
+        "blocks": blocks_payload
     }
     doc.close()
     return payload
@@ -100,6 +163,18 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
                 return
             data = get_page_payload(ACTIVE_PDF_BYTES, p_idx)
             self.send_json(data)
+            return
+
+        if url.path == "/api/export":
+            if ACTIVE_PDF_BYTES is None:
+                self.send_json({"status": "error", "message": "No document active"}, status=400)
+                return
+            b64_res = base64.b64encode(ACTIVE_PDF_BYTES).decode("ascii")
+            self.send_json({
+                "status": "success",
+                "pdf_base64": b64_res,
+                "filename": "edited_clean.pdf"
+            })
             return
 
         return super().do_GET()
