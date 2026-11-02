@@ -260,7 +260,23 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
     page = doc[p_idx]
     e_type = edit.get("type", "replace")
 
+    if e_type == "replace_image":
+        replace_image_with_reflow(doc, page, edit)
+        return
+
+    if e_type == "delete_image":
+        delete_image_with_reflow(doc, page, edit)
+        return
+
     if e_type == "replace":
+        has_new_pos = (edit.get("new_x") is not None and edit.get("new_y") is not None)
+        do_reflow = edit.get("reflow", True)
+
+        if not has_new_pos and do_reflow:
+            reflow_and_replace_text(doc, page, edit)
+            return
+
+        # Direct in-place or moved replacement without full document reflow
         old_text = edit.get("oldText", "")
         new_text = edit.get("newText", "")
 
@@ -545,18 +561,34 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
         else:
             active_font = font_info.get("name", "helv")
 
-        page.insert_text(
-            pymupdf.Point(x, y),
-            new_text,
-            fontsize=size,
-            color=parse_color(color_val),
-            fontname=active_font
-        )
+        for idx, line_str in enumerate(lines):
+            line_txt = line_str.strip()
+            if line_txt:
+                insert_pt = pymupdf.Point(x, baseline_y + (idx * line_height))
+                page.insert_text(
+                    insert_pt,
+                    line_txt,
+                    fontsize=size,
+                    color=parse_color(color_val),
+                    fontname=active_font
+                )
 
     elif e_type == "redact":
-        bbox = edit.get("bbox")
-        if bbox:
-            rect = pymupdf.Rect(*bbox)
+        bbox_list = []
+        if edit.get("bboxes"):
+            bbox_list = edit["bboxes"]
+        elif edit.get("bbox"):
+            bbox_list = [edit["bbox"]]
+
+        for bb in bbox_list:
+            rect = pymupdf.Rect(*bb)
             bg_color = sample_background_color(page, rect)
-            page.add_redact_annot(rect, fill=bg_color)
-            page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE)
+            pad = 0.5
+            erase_rect = pymupdf.Rect(
+                rect.x0 - pad,
+                rect.y0 - pad,
+                rect.x1 + pad,
+                rect.y1 + pad
+            )
+            page.add_redact_annot(erase_rect, fill=bg_color)
+        page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE)
