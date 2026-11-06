@@ -530,36 +530,55 @@ class PDFWatermarkSanitizer:
             except Exception:
                 pass
 
-        # 3. Discover Document-Wide Watermark XObjects (Forms & SMasks)
+        # 3. Discover Document-Wide Watermark Images & Form XObjects
         watermark_xobjects = set()
         watermark_xrefs = set()
+        smask_image_xrefs = set()
+
+        # Step 3a: Discover all images with /SMask transparency masks
+        for xref in range(1, doc.xref_length()):
+            try:
+                obj_str = doc.xref_object(xref)
+                if "/Subtype /Image" in obj_str and "/SMask" in obj_str:
+                    smask_image_xrefs.add(xref)
+                    watermark_xrefs.add(xref)
+            except Exception:
+                pass
+
+        # Step 3b: Discover Form XObjects calling SMask images, or with large watermark BBoxes
+        for xref in range(1, doc.xref_length()):
+            try:
+                obj_str = doc.xref_object(xref)
+                if "/Subtype /Form" in obj_str:
+                    stream = doc.xref_stream(xref).decode("latin1", errors="ignore")
+                    stream_lower = stream.lower()
+                    is_wm = False
+
+                    if any(t in stream_lower for t in ["watermark", "stamp", "draft", "cpdfstamp", "/smask"]):
+                        is_wm = True
+                    elif any(kw in stream_lower for kw in self.keywords):
+                        is_wm = True
+                    elif any(f"{img_xref} 0 R" in obj_str for img_xref in smask_image_xrefs):
+                        is_wm = True
+                    elif "/im" in stream_lower:
+                        bbox_m = re.search(r'/BBox\s*\[\s*([0-9.\-]+)\s+([0-9.\-]+)\s+([0-9.\-]+)\s+([0-9.\-]+)\s*\]', obj_str)
+                        if bbox_m:
+                            w = abs(float(bbox_m.group(3)) - float(bbox_m.group(1)))
+                            h = abs(float(bbox_m.group(4)) - float(bbox_m.group(2)))
+                            if w > 250 and h > 350:
+                                is_wm = True
+
+                    if is_wm:
+                        watermark_xrefs.add(xref)
+            except Exception:
+                pass
+
+        # Step 3c: Map watermark XObject xrefs to their names across all pages
         try:
             for p in doc:
                 for x in p.get_xobjects():
-                    x_xref, x_name = x[0], x[1]
-                    obj_str = doc.xref_object(x_xref)
-                    is_wm = False
-
-                    if "/SMask" in obj_str:
-                        is_wm = True
-                    elif "/Subtype /Form" in obj_str:
-                        try:
-                            form_stream = doc.xref_stream(x_xref).decode("latin1", errors="ignore")
-                            form_lower = form_stream.lower()
-                            if any(t in form_lower for t in ["watermark", "stamp", "draft", "cpdfstamp", "/smask"]):
-                                is_wm = True
-                            elif any(kw in form_lower for kw in self.keywords):
-                                is_wm = True
-                            # Check if the Form sets low opacity /CA or /ca < 0.75
-                            elif "/ca " in form_stream or "/CA " in form_stream or "/GS" in form_stream:
-                                if any(t in form_lower for t in ["/im", "/cp"]):
-                                    is_wm = True
-                        except Exception:
-                            pass
-
-                    if is_wm:
-                        watermark_xobjects.add(x_name)
-                        watermark_xrefs.add(x_xref)
+                    if x[0] in watermark_xrefs:
+                        watermark_xobjects.add(x[1])
         except Exception:
             pass
 

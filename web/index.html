@@ -37,8 +37,13 @@
             position: absolute;
             cursor: pointer;
             border-radius: 3px;
-            transition: background 0.12s ease, outline 0.12s ease;
-            z-index: 10;
+            transition: all 0.1s ease;
+            z-index: 30;
+        }
+        .text-target-box:hover {
+            background-color: rgba(59, 130, 246, 0.22);
+            outline: 2px solid #2563EB;
+            outline-offset: 1px;
         }
         .text-target-box:hover {
             background-color: rgba(59, 130, 246, 0.25);
@@ -184,7 +189,8 @@
 <body class="bg-slate-900 text-slate-100 h-screen flex flex-col font-sans overflow-hidden select-none">
 
     <!-- Top Navigation Header -->
-    <header class="bg-slate-950 border-b border-slate-800 px-4 py-2.5 flex items-center justify-between shadow-md z-30 flex-wrap gap-2">
+    <!-- Top Navigation Header -->
+    <header class="bg-slate-950 border-b border-slate-800 px-4 py-2.5 flex items-center justify-between shadow-md z-30 flex-wrap gap-3">
         <!-- Left: Brand & File Actions -->
         <div class="flex items-center gap-3">
             <div class="flex items-center gap-2">
@@ -195,82 +201,43 @@
                     <div class="flex items-center gap-2">
                         <h1 class="font-bold text-base tracking-tight text-white">GhostPDF Studio</h1>
                         <span class="text-[10px] font-bold px-1.5 py-0.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded flex items-center gap-1">
-                            <i data-lucide="shield-check" class="w-3 h-3"></i> Anti-Overlap Reflow
+                            <i data-lucide="shield-check" class="w-3 h-3"></i> 2-in-1 Engine
                         </span>
                     </div>
-                    <p class="text-[11px] text-slate-400 leading-none">Global Search, Replace & Stream Layout Engine</p>
+                    <p class="text-[11px] text-slate-400 leading-none">Universal Watermark Remover & PDF Text Editor</p>
                 </div>
             </div>
 
             <div class="h-6 w-px bg-slate-800 mx-1"></div>
 
-            <!-- Upload PDF -->
-            <label class="cursor-pointer flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-lg text-xs font-medium transition border border-slate-700" title="Upload any PDF to edit locally">
-                <i data-lucide="upload" class="w-3.5 h-3.5 text-blue-400"></i>
+            <!-- Upload File (PDF, DOCX, PPTX, XLSX, Images) -->
+            <label class="cursor-pointer flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-lg text-xs font-semibold transition border border-slate-700 shadow-sm" title="Open PDF, Word, PowerPoint, Excel or Images">
+                <i data-lucide="folder-open" class="w-3.5 h-3.5 text-blue-400"></i>
                 <span>Open File</span>
                 <input type="file" id="pdfFileInput" accept=".pdf,.docx,.pptx,.xlsx,.png,.jpg,.jpeg,.webp,.tiff,.bmp" class="hidden">
             </label>
         </div>
 
-        <!-- Center: Tool Modes & Granularity -->
-        <div class="flex items-center gap-2 bg-slate-900 p-1 rounded-xl border border-slate-800 shadow-inner">
-            <!-- Main Tools -->
-            <div class="flex items-center gap-1">
-                <button id="toolSelectBtn" class="tool-btn active flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition" title="Select & Edit Text / Image">
-                    <i data-lucide="mouse-pointer" class="w-3.5 h-3.5"></i>
-                    <span>Select</span>
-                </button>
-                <button id="toolAddTextBtn" class="tool-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition" title="Add movable text box">
-                    <i data-lucide="plus-circle" class="w-3.5 h-3.5 text-emerald-400"></i>
-                    <span>Add Text</span>
-                </button>
-                <button id="toolEraseAreaBtn" class="tool-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition" title="Draw rectangle to whiteout / erase area">
-                    <i data-lucide="square-dashed" class="w-3.5 h-3.5 text-rose-400"></i>
-                    <span>Erase Area</span>
-                </button>
-                <button id="toolPanBtn" class="tool-btn flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition" title="Hand Tool (Pan canvas, or hold Space)">
-                    <i data-lucide="hand" class="w-3.5 h-3.5"></i>
-                </button>
-            </div>
-
-            <div class="h-4 w-px bg-slate-800 mx-1"></div>
-
-            <!-- Granularity Selector -->
-            <div class="flex items-center bg-slate-950 p-0.5 rounded-lg border border-slate-800 text-[11px]" id="granularityContainer">
-                <span class="text-slate-400 px-2 font-medium">Select:</span>
-                <button id="granWordBtn" class="granularity-btn active px-2.5 py-1 rounded text-slate-300 hover:text-white transition flex items-center gap-1" title="Click to select individual word">
-                    <span>🔤 Word</span>
-                </button>
-                <button id="granLineBtn" class="granularity-btn px-2.5 py-1 rounded text-slate-300 hover:text-white transition flex items-center gap-1" title="Click to select whole line">
-                    <span>📝 Line</span>
-                </button>
-                <button id="granBlockBtn" class="granularity-btn px-2.5 py-1 rounded text-slate-300 hover:text-white transition flex items-center gap-1" title="Click to select whole text box / block">
-                    <span>📦 Text Box</span>
-                </button>
-            </div>
+        <!-- Center: TWO MASTER USER OPTIONS (Tabs) -->
+        <div class="flex items-center bg-slate-900 p-1 rounded-xl border border-slate-700 shadow-inner gap-1">
+            <button id="modeWatermarkTab" class="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition bg-gradient-to-r from-rose-600 via-pink-600 to-amber-600 text-white shadow-md shadow-rose-600/30 cursor-pointer">
+                <i data-lucide="shield-alert" class="w-4 h-4"></i>
+                <span>1. Watermark Remover</span>
+            </button>
+            <button id="modeEditorTab" class="flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer">
+                <i data-lucide="edit-3" class="w-4 h-4"></i>
+                <span>2. PDF Editor</span>
+            </button>
         </div>
 
-        <!-- Right: Find & Replace, Undo/Redo, Pagination, Zoom, Export -->
+        <!-- Right: Pagination, Zoom & Export -->
         <div class="flex items-center gap-2">
-            
-            <!-- Watermark Remover Toggle Button -->
-            <button id="watermarkToggleBtn" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-rose-300 hover:text-white bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 transition shadow-sm" title="Universal Watermark Remover & Document Sanitizer">
-                <i data-lucide="shield-alert" class="w-3.5 h-3.5 text-rose-400"></i>
-                <span>Watermark Remover</span>
-            </button>
-
-            <!-- Global Find & Replace Toggle Button -->
-            <button id="findReplaceToggleBtn" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-amber-300 hover:text-white bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition shadow-sm" title="Global Search & Replace across whole PDF (Ctrl+F / Cmd+F)">
-                <i data-lucide="search" class="w-3.5 h-3.5 text-amber-400"></i>
-                <span>Find & Replace</span>
-            </button>
-
             <!-- Undo / Redo -->
             <div class="flex items-center bg-slate-900 rounded-lg border border-slate-800 p-0.5">
-                <button id="undoBtn" disabled class="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none transition" title="Undo (Ctrl+Z / Cmd+Z)">
+                <button id="undoBtn" disabled class="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none transition" title="Undo (Ctrl+Z)">
                     <i data-lucide="undo-2" class="w-4 h-4"></i>
                 </button>
-                <button id="redoBtn" disabled class="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none transition" title="Redo (Ctrl+Y / Cmd+Shift+Z)">
+                <button id="redoBtn" disabled class="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-white disabled:opacity-30 disabled:pointer-events-none transition" title="Redo (Ctrl+Y)">
                     <i data-lucide="redo-2" class="w-4 h-4"></i>
                 </button>
             </div>
@@ -286,12 +253,12 @@
                 </button>
             </div>
 
-            <!-- Zoom Controls -->
+            <!-- Zoom -->
             <div class="flex items-center bg-slate-900 px-2 py-1 rounded-lg border border-slate-800 text-xs">
                 <button id="zoomOutBtn" class="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Zoom Out">
                     <i data-lucide="minus" class="w-3.5 h-3.5"></i>
                 </button>
-                <button id="zoomResetBtn" class="w-12 text-center font-mono font-medium text-slate-200 hover:text-blue-400 transition" title="Click to reset to 100%">
+                <button id="zoomResetBtn" class="w-12 text-center font-mono font-medium text-slate-200 hover:text-blue-400 transition" title="Reset Zoom">
                     <span id="zoomLabel">100%</span>
                 </button>
                 <button id="zoomInBtn" class="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Zoom In">
@@ -302,20 +269,114 @@
                 </button>
             </div>
 
-            <!-- Download Clean PDF -->
-            <button id="downloadPdfBtn" class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow-md shadow-emerald-600/20 transition flex items-center gap-1.5">
+            <!-- Download -->
+            <button id="downloadPdfBtn" class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow-md shadow-emerald-600/20 transition flex items-center gap-1.5 cursor-pointer">
                 <i data-lucide="download" class="w-4 h-4"></i>
-                <span>Download Clean PDF</span>
+                <span id="downloadBtnLabel">Download Clean PDF</span>
             </button>
         </div>
     </header>
 
+    <!-- OPTION 1 TOOLBAR: Watermark Remover Controls (Active by default) -->
+    <div id="watermarkToolbar" class="bg-slate-950/95 border-b border-rose-900/40 px-6 py-2.5 flex items-center justify-between shadow-lg backdrop-blur-md flex-wrap gap-3">
+        <div class="flex items-center gap-3">
+            <button id="purgeAllWatermarksBtn" class="px-4 py-2 bg-gradient-to-r from-rose-600 via-pink-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white rounded-lg text-xs font-bold shadow-lg shadow-rose-600/40 flex items-center gap-2 transition transform active:scale-95 cursor-pointer">
+                <i data-lucide="sparkles" class="w-4 h-4"></i>
+                <span>Purge All Watermarks Across Document</span>
+            </button>
+
+            <div class="h-6 w-px bg-slate-800"></div>
+
+            <!-- Granular Toggles -->
+            <div class="flex items-center gap-3 text-[11px] text-slate-300">
+                <label class="flex items-center gap-1.5 cursor-pointer hover:text-white">
+                    <input type="checkbox" id="wmOptText" checked class="rounded border-slate-700 text-rose-600 focus:ring-0">
+                    <span>Form & Text Stamps</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer hover:text-white">
+                    <input type="checkbox" id="wmOptVectors" checked class="rounded border-slate-700 text-rose-600 focus:ring-0">
+                    <span>Vector Bézier Paths</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer hover:text-white">
+                    <input type="checkbox" id="wmOptScanned" checked class="rounded border-slate-700 text-rose-600 focus:ring-0">
+                    <span>Scanned Bleach</span>
+                </label>
+                <label class="flex items-center gap-1.5 cursor-pointer hover:text-white">
+                    <input type="checkbox" id="wmOptDots" checked class="rounded border-slate-700 text-rose-600 focus:ring-0">
+                    <span>Printer Dots (MIC)</span>
+                </label>
+            </div>
+        </div>
+
+        <!-- Right: Keywords input & Jump to Editor -->
+        <div class="flex items-center gap-3">
+            <div class="flex items-center gap-1.5 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1">
+                <i data-lucide="tag" class="w-3.5 h-3.5 text-slate-400"></i>
+                <input type="text" id="wmCustomKeywords" placeholder="Keywords (e.g. DRAFT, CONFIDENTIAL)..." class="bg-transparent text-xs text-slate-100 focus:outline-none w-52 font-sans">
+            </div>
+
+            <button id="jumpToEditorBtn" class="px-3.5 py-1.5 bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white border border-blue-500/30 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer">
+                <span>Next: Open in PDF Editor</span>
+                <i data-lucide="arrow-right" class="w-3.5 h-3.5"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- OPTION 2 TOOLBAR: PDF Editor Controls (Hidden when in Watermark Remover mode) -->
+    <div id="editorToolbar" class="hidden bg-slate-950/90 border-b border-slate-800 px-6 py-2 flex items-center justify-between backdrop-blur-sm flex-wrap gap-3">
+        <!-- Tools & Granularity -->
+        <div class="flex items-center gap-2">
+            <!-- Granularity Selector -->
+            <div class="flex items-center bg-slate-900 p-0.5 rounded-lg border border-slate-800 text-[11px]" id="granularityContainer">
+                <span class="text-slate-400 px-2 font-medium">Scope:</span>
+                <button id="granWordBtn" class="granularity-btn active px-2.5 py-1 rounded text-slate-300 hover:text-white transition flex items-center gap-1">
+                    <span>🔤 Word</span>
+                </button>
+                <button id="granLineBtn" class="granularity-btn px-2.5 py-1 rounded text-slate-300 hover:text-white transition flex items-center gap-1">
+                    <span>📝 Line</span>
+                </button>
+                <button id="granBlockBtn" class="granularity-btn px-2.5 py-1 rounded text-slate-300 hover:text-white transition flex items-center gap-1">
+                    <span>📦 Text Box</span>
+                </button>
+            </div>
+
+            <div class="h-5 w-px bg-slate-800 mx-1"></div>
+
+            <!-- Tool Selection -->
+            <div class="flex items-center gap-1">
+                <button id="toolSelectBtn" class="tool-btn active flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition">
+                    <i data-lucide="mouse-pointer" class="w-3.5 h-3.5"></i>
+                    <span>Select & Edit</span>
+                </button>
+                <button id="toolAddTextBtn" class="tool-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition">
+                    <i data-lucide="plus-circle" class="w-3.5 h-3.5 text-emerald-400"></i>
+                    <span>Add Text</span>
+                </button>
+                <button id="toolEraseAreaBtn" class="tool-btn flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition">
+                    <i data-lucide="square-dashed" class="w-3.5 h-3.5 text-rose-400"></i>
+                    <span>Erase Area</span>
+                </button>
+                <button id="toolPanBtn" class="tool-btn flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-300 hover:text-white hover:bg-slate-800 transition">
+                    <i data-lucide="hand" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- Global Find & Replace Toggle Button -->
+        <div class="flex items-center gap-2">
+            <button id="findReplaceToggleBtn" class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-amber-300 hover:text-white bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 transition shadow-sm cursor-pointer" title="Find & Replace across PDF (Ctrl+F)">
+                <i data-lucide="search" class="w-3.5 h-3.5 text-amber-400"></i>
+                <span>Find & Replace (Ctrl+F)</span>
+            </button>
+        </div>
+    </div>
+
     <!-- Sub-bar: Instructions & Live Status -->
-    <div class="bg-slate-950/70 border-b border-slate-800/80 px-6 py-1.5 text-xs text-slate-300 flex items-center justify-between backdrop-blur-sm">
+    <div class="bg-slate-950/80 border-b border-slate-800 px-6 py-1.5 text-xs text-slate-300 flex items-center justify-between backdrop-blur-sm">
         <div class="flex items-center gap-2">
             <span id="modeDescription" class="flex items-center gap-1.5 text-slate-300">
-                <i data-lucide="info" class="w-3.5 h-3.5 text-blue-400"></i>
-                <span><strong>Global Find & Replace:</strong> Search any word/amount across all pages and batch replace with automatic reflow! Press <strong>Cmd+F</strong> or <strong>Ctrl+F</strong>.</span>
+                <i data-lucide="info" class="w-3.5 h-3.5 text-rose-400"></i>
+                <span id="modeDescriptionText"><strong>Watermark Remover Active:</strong> Click 'Purge All Watermarks' to strip transparent Form overlays, tracking codes, and diagonal watermarks across all pages.</span>
             </span>
         </div>
         <div id="liveStatusMsg" class="font-medium text-emerald-400 flex items-center gap-1.5 text-[11px]">
@@ -343,104 +404,6 @@
             <div id="selectionMarquee" class="marquee-rect hidden"></div>
         </div>
     </main>
-
-    
-    <!-- Universal Watermark Remover Floating Modal -->
-    <div id="watermarkModal" class="hidden absolute top-14 right-6 bg-slate-900 border border-slate-700 text-slate-100 p-4 rounded-xl shadow-2xl z-[130] w-[420px] flex flex-col gap-3.5 backdrop-blur-md">
-        <!-- Header -->
-        <div class="flex items-center justify-between border-b border-slate-800 pb-2.5">
-            <div class="flex items-center gap-2">
-                <div class="p-1.5 bg-rose-500/20 text-rose-400 border border-rose-500/30 rounded-lg">
-                    <i data-lucide="shield-check" class="w-4 h-4"></i>
-                </div>
-                <div>
-                    <h3 class="text-xs font-bold text-white tracking-tight">Universal Watermark Sanitizer</h3>
-                    <p class="text-[10px] text-slate-400">PDF, Office (Word/PPT/Excel), Scanned & Images</p>
-                </div>
-            </div>
-            <button id="wmCloseBtn" class="p-1 hover:bg-slate-800 rounded text-slate-400 hover:text-white" title="Close (Esc)">
-                <i data-lucide="x" class="w-3.5 h-3.5"></i>
-            </button>
-        </div>
-
-        <!-- 1-Click Fast Purge Action -->
-        <button id="purgeAllWatermarksBtn" class="w-full py-2.5 px-4 bg-gradient-to-r from-rose-600 via-pink-600 to-amber-600 hover:from-rose-500 hover:to-amber-500 text-white rounded-lg text-xs font-bold shadow-lg shadow-rose-600/30 flex items-center justify-center gap-2 transition transform active:scale-98">
-            <i data-lucide="sparkles" class="w-4 h-4"></i>
-            <span>Purge All Watermarks Across Document</span>
-        </button>
-
-        <!-- Granular Toggles -->
-        <div class="flex flex-col gap-2 bg-slate-950 p-2.5 rounded-lg border border-slate-800 text-xs">
-            <span class="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">Sanitization Passes</span>
-            
-            <label class="flex items-center justify-between cursor-pointer text-slate-200 hover:text-white">
-                <span class="flex items-center gap-1.5">
-                    <i data-lucide="file-text" class="w-3.5 h-3.5 text-blue-400"></i>
-                    <span>Marked Content & Form XObjects</span>
-                </span>
-                <input type="checkbox" id="wmOptText" checked class="rounded border-slate-700 text-rose-600 focus:ring-0">
-            </label>
-
-            <label class="flex items-center justify-between cursor-pointer text-slate-200 hover:text-white">
-                <span class="flex items-center gap-1.5">
-                    <i data-lucide="pen-tool" class="w-3.5 h-3.5 text-purple-400"></i>
-                    <span>Vector Drawing Paths (Béziers)</span>
-                </span>
-                <input type="checkbox" id="wmOptVectors" checked class="rounded border-slate-700 text-rose-600 focus:ring-0">
-            </label>
-
-            <label class="flex items-center justify-between cursor-pointer text-slate-200 hover:text-white">
-                <span class="flex items-center gap-1.5">
-                    <i data-lucide="eye-off" class="w-3.5 h-3.5 text-amber-400"></i>
-                    <span>Low-Contrast & Faint Gray Text</span>
-                </span>
-                <input type="checkbox" id="wmOptLowContrast" checked class="rounded border-slate-700 text-rose-600 focus:ring-0">
-            </label>
-
-            <label class="flex items-center justify-between cursor-pointer text-slate-200 hover:text-white">
-                <span class="flex items-center gap-1.5">
-                    <i data-lucide="image" class="w-3.5 h-3.5 text-emerald-400"></i>
-                    <span>Scanned Document Bleaching</span>
-                </span>
-                <input type="checkbox" id="wmOptScanned" checked class="rounded border-slate-700 text-rose-600 focus:ring-0">
-            </label>
-
-            <label class="flex items-center justify-between cursor-pointer text-slate-200 hover:text-white">
-                <span class="flex items-center gap-1.5">
-                    <i data-lucide="printer" class="w-3.5 h-3.5 text-yellow-400"></i>
-                    <span>Printer Tracking Dots (MIC)</span>
-                </span>
-                <input type="checkbox" id="wmOptDots" checked class="rounded border-slate-700 text-rose-600 focus:ring-0">
-            </label>
-
-            <label class="flex items-center justify-between cursor-pointer text-slate-200 hover:text-white">
-                <span class="flex items-center gap-1.5">
-                    <i data-lucide="binary" class="w-3.5 h-3.5 text-cyan-400"></i>
-                    <span>Invisible Steganography (LSB/FFT)</span>
-                </span>
-                <input type="checkbox" id="wmOptStego" checked class="rounded border-slate-700 text-rose-600 focus:ring-0">
-            </label>
-        </div>
-
-        <!-- Custom Keywords Input -->
-        <div class="flex flex-col gap-1">
-            <label class="text-[10px] font-medium text-slate-400">Additional Watermark Keywords (comma-separated):</label>
-            <input type="text" id="wmCustomKeywords" placeholder="e.g. CONFIDENTIAL, DRAFT, SAMPLE, EXAM HASH" class="bg-slate-950 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-slate-100 focus:outline-none focus:border-rose-500 font-sans">
-        </div>
-
-        <!-- Audit Metrics Display (Populated after sanitization) -->
-        <div id="wmAuditBox" class="hidden flex flex-col gap-1.5 bg-slate-950 p-2.5 rounded-lg border border-emerald-500/30 text-xs">
-            <div class="flex items-center justify-between text-emerald-400 font-semibold text-[11px]">
-                <span class="flex items-center gap-1">
-                    <i data-lucide="check-circle" class="w-3.5 h-3.5"></i> Sanitization Audit Report
-                </span>
-                <span id="wmAuditStatusBadge" class="text-[10px] px-1.5 py-0.5 bg-emerald-500/20 rounded">Clean</span>
-            </div>
-            <div id="wmAuditMetricsGrid" class="grid grid-cols-2 gap-1.5 pt-1 text-[11px] text-slate-300">
-                <!-- Dynamically populated -->
-            </div>
-        </div>
-    </div>
 
     <!-- Global Find & Replace Floating Card / Modal -->
     <div id="findReplaceModal" class="hidden absolute top-14 right-6 bg-slate-900 border border-slate-700 text-slate-100 p-4 rounded-xl shadow-2xl z-[130] w-[380px] flex flex-col gap-3">
@@ -886,23 +849,32 @@
                 const width = Math.max((x1 - x0) * scaleX, 24);
                 const height = Math.max((y1 - y0) * scaleY, 24);
 
+                const isFullBackground = (width > renderWidth * 0.6) && (height > renderHeight * 0.6);
+
                 const imgBox = document.createElement('div');
                 imgBox.className = 'image-target-box';
                 imgBox.style.left = `${left}px`;
                 imgBox.style.top = `${top}px`;
                 imgBox.style.width = `${width}px`;
                 imgBox.style.height = `${height}px`;
-                imgBox.title = `Image (${Math.round(img.width)}×${Math.round(img.height)} pt). Click to replace or resize.`;
 
-                const badge = document.createElement('div');
-                badge.className = 'image-badge';
-                badge.innerHTML = `<i data-lucide="image" class="w-3.5 h-3.5 text-purple-400"></i><span>${Math.round(img.width)}×${Math.round(img.height)} pt</span>`;
-                imgBox.appendChild(badge);
+                if (isFullBackground) {
+                    imgBox.style.zIndex = '2';
+                    imgBox.style.border = 'none';
+                    imgBox.style.pointerEvents = 'none'; // Don't block clicks to text!
+                } else {
+                    imgBox.style.zIndex = '15';
+                    imgBox.title = `Image (${Math.round(img.width)}×${Math.round(img.height)} pt). Click to replace or resize.`;
+                    const badge = document.createElement('div');
+                    badge.className = 'image-badge';
+                    badge.innerHTML = `<i data-lucide="image" class="w-3.5 h-3.5 text-purple-400"></i><span>${Math.round(img.width)}×${Math.round(img.height)} pt</span>`;
+                    imgBox.appendChild(badge);
 
-                imgBox.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    openImageInspector(img, left, top, width, height);
-                });
+                    imgBox.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        openImageInspector(img, left, top, width, height);
+                    });
+                }
 
                 interactiveOverlay.appendChild(imgBox);
             });
@@ -2285,55 +2257,83 @@
         loadPage(0);
     
         // -------------------------------------------------------------
-        // Universal Watermark Sanitizer Handling
+        // TWO MASTER USER OPTIONS: 1. Watermark Remover vs 2. PDF Editor
         // -------------------------------------------------------------
-        const watermarkToggleBtn = document.getElementById('watermarkToggleBtn');
-        const watermarkModal = document.getElementById('watermarkModal');
-        const wmCloseBtn = document.getElementById('wmCloseBtn');
+        let currentMasterMode = 'watermark'; // 'watermark' or 'editor'
+
+        const modeWatermarkTab = document.getElementById('modeWatermarkTab');
+        const modeEditorTab = document.getElementById('modeEditorTab');
+        const watermarkToolbar = document.getElementById('watermarkToolbar');
+        const editorToolbar = document.getElementById('editorToolbar');
+        const modeDescriptionText = document.getElementById('modeDescriptionText');
+        const jumpToEditorBtn = document.getElementById('jumpToEditorBtn');
         const purgeAllWatermarksBtn = document.getElementById('purgeAllWatermarksBtn');
         const wmOptText = document.getElementById('wmOptText');
         const wmOptVectors = document.getElementById('wmOptVectors');
-        const wmOptLowContrast = document.getElementById('wmOptLowContrast');
         const wmOptScanned = document.getElementById('wmOptScanned');
         const wmOptDots = document.getElementById('wmOptDots');
-        const wmOptStego = document.getElementById('wmOptStego');
         const wmCustomKeywords = document.getElementById('wmCustomKeywords');
-        const wmAuditBox = document.getElementById('wmAuditBox');
-        const wmAuditMetricsGrid = document.getElementById('wmAuditMetricsGrid');
 
-        watermarkToggleBtn.addEventListener('click', () => {
-            const isHidden = watermarkModal.classList.contains('hidden');
-            if (isHidden) {
-                closeFindReplaceModal();
-                closeEditorCard();
-                watermarkModal.classList.remove('hidden');
-                lucide.createIcons();
+        function setMasterMode(mode) {
+            currentMasterMode = mode;
+            closeEditorCard();
+            closeImageCard();
+            closeAreaModal();
+            closeFindReplaceModal();
+
+            if (mode === 'watermark') {
+                // Style Option 1 Tab as Active
+                modeWatermarkTab.className = "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition bg-gradient-to-r from-rose-600 via-pink-600 to-amber-600 text-white shadow-md shadow-rose-600/30 cursor-pointer";
+                modeEditorTab.className = "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer";
+
+                watermarkToolbar.classList.remove('hidden');
+                editorToolbar.classList.add('hidden');
+                modeDescriptionText.innerHTML = "<strong>Watermark Remover Active:</strong> Click 'Purge All Watermarks' to strip transparent Form overlays, tracking codes, and diagonal watermarks across all pages.";
+
+                // In Watermark mode, keep overlay clean
+                interactiveOverlay.style.pointerEvents = 'none';
+                interactiveOverlay.style.opacity = '0';
             } else {
-                watermarkModal.classList.add('hidden');
+                // Style Option 2 Tab as Active
+                modeEditorTab.className = "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 text-white shadow-md shadow-blue-600/30 cursor-pointer";
+                modeWatermarkTab.className = "flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-bold transition text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer";
+
+                editorToolbar.classList.remove('hidden');
+                watermarkToolbar.classList.add('hidden');
+                modeDescriptionText.innerHTML = "<strong>PDF Editor Active:</strong> Click on any word, line, or paragraph box to edit text in place with zero overlap. Press <strong>Ctrl+Enter</strong> to apply.";
+
+                // In Editor mode, activate interactive overlay
+                interactiveOverlay.style.pointerEvents = 'auto';
+                interactiveOverlay.style.opacity = '1';
+                rebuildInteractiveOverlay();
             }
-        });
+            lucide.createIcons();
+        }
 
-        wmCloseBtn.addEventListener('click', () => {
-            watermarkModal.classList.add('hidden');
-        });
+        modeWatermarkTab.addEventListener('click', () => setMasterMode('watermark'));
+        modeEditorTab.addEventListener('click', () => setMasterMode('editor'));
+        if (jumpToEditorBtn) {
+            jumpToEditorBtn.addEventListener('click', () => setMasterMode('editor'));
+        }
 
+        // Purge All Watermarks Action
         purgeAllWatermarksBtn.addEventListener('click', async () => {
             purgeAllWatermarksBtn.disabled = true;
             purgeAllWatermarksBtn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>Purging Watermarks...</span>';
             lucide.createIcons();
-            setStatus('Purging all watermarks across document...', 'loading');
+            setStatus('Purging watermarks across all pages...', 'loading');
 
-            const kwRaw = wmCustomKeywords.value || '';
+            const kwRaw = wmCustomKeywords ? (wmCustomKeywords.value || '') : '';
             const kwList = kwRaw.split(',').map(s => s.trim()).filter(Boolean);
 
             const payload = {
                 page_index: currentPageIndex,
-                remove_text: wmOptText.checked,
-                remove_vectors: wmOptVectors.checked,
+                remove_text: wmOptText ? wmOptText.checked : true,
+                remove_vectors: wmOptVectors ? wmOptVectors.checked : true,
                 remove_annots: true,
-                remove_dots: wmOptDots.checked,
-                remove_stego: wmOptStego.checked,
-                flatten_scanned: wmOptScanned.checked,
+                remove_dots: wmOptDots ? wmOptDots.checked : true,
+                remove_stego: true,
+                flatten_scanned: wmOptScanned ? wmOptScanned.checked : true,
                 keywords: kwList.length > 0 ? kwList : null
             };
 
@@ -2347,8 +2347,14 @@
 
                 if (data.status === 'success') {
                     renderPageData(data.data);
-                    displayAuditReport(data.audit);
-                    setStatus('Watermarks successfully purged!', 'success');
+                    const audit = data.audit || {};
+                    const purgedText = audit.text_watermarks_removed || 0;
+                    const purgedXObjects = audit.xobjects_cleared || 0;
+                    const purgedVectors = audit.vector_paths_removed || 0;
+                    const cleanedImgs = audit.images_sanitized || 0;
+
+                    setStatus(`Purge Complete! Excised ${purgedText} stamps, ${purgedXObjects} overlays, ${purgedVectors} vectors.`, 'success');
+                    alert(`[+] Watermark Purge Complete!\n\n- Text & Tracking Stamps Removed: ${purgedText}\n- Form XObjects Cleared: ${purgedXObjects}\n- Vector Drawing Paths Excised: ${purgedVectors}\n- Scanned Images Bleached: ${cleanedImgs}\n\nDocument is now 100% clean. You can download it or switch to "PDF Editor" to edit text!`);
                 } else {
                     alert('Sanitization error: ' + data.message);
                     setStatus('Error during sanitization', 'error');
@@ -2363,36 +2369,12 @@
             }
         });
 
-        function displayAuditReport(audit) {
-            if (!audit) return;
-            wmAuditBox.classList.remove('hidden');
-            wmAuditMetricsGrid.innerHTML = '';
-
-            const items = [
-                { label: 'Text Stamps Purged', val: audit.text_watermarks_removed || 0, icon: 'file-text' },
-                { label: 'Vector Paths Excised', val: audit.vector_paths_removed || 0, icon: 'pen-tool' },
-                { label: 'XObjects Cleared', val: audit.xobjects_cleared || 0, icon: 'layers' },
-                { label: 'Images Cleaned', val: audit.images_sanitized || 0, icon: 'image' },
-                { label: 'Annotations Stripped', val: audit.annotations_removed || 0, icon: 'trash-2' },
-                { label: 'Metadata Tracking', val: audit.metadata_cleared ? 'Cleared' : 'Kept', icon: 'shield-check' }
-            ];
-
-            items.forEach(item => {
-                const row = document.createElement('div');
-                row.className = 'flex items-center justify-between p-1 bg-slate-900 rounded border border-slate-800';
-                row.innerHTML = `<span class="text-slate-400 flex items-center gap-1"><i data-lucide="${item.icon}" class="w-3 h-3"></i> ${item.label}:</span> <span class="font-mono font-bold text-emerald-400">${item.val}</span>`;
-                wmAuditMetricsGrid.appendChild(row);
-            });
-
-            lucide.createIcons();
-        }
-
         // Upgrade file upload handler to support Office documents & Images
         pdfFileInput.addEventListener('change', async (e) => {
             const file = e.target.files[0];
             if (!file) return;
 
-            setStatus(`Uploading and analyzing ${file.name}...`, 'loading');
+            setStatus(`Uploading and processing ${file.name}...`, 'loading');
             const reader = new FileReader();
             reader.onload = async () => {
                 const b64 = reader.result;
@@ -2410,9 +2392,8 @@
                         } else {
                             // Non-PDF (DOCX, PPTX, XLSX, Image) automatically sanitized!
                             triggerDownloadBase64(respData.file_base64, respData.filename);
-                            displayAuditReport(respData.audit);
-                            watermarkModal.classList.remove('hidden');
                             setStatus(`Sanitized and downloaded ${respData.filename}!`, 'success');
+                            alert(`[+] Office / Image Sanitized!\n\nFile "${respData.filename}" has been downloaded with all watermarks purged.`);
                         }
                     } else {
                         alert('Upload failed: ' + respData.message);
@@ -2434,6 +2415,11 @@
             a.click();
             document.body.removeChild(a);
         }
+
+        // Initialize to Watermark mode on load
+        window.addEventListener('DOMContentLoaded', () => {
+            setMasterMode('watermark');
+        });
 
     </script>
 </body>
