@@ -1,13 +1,28 @@
 """
-Universal Watermark & Steganography Sanitizer Engine.
-Designed to pair with Ghost PDF (pdf_engine).
+Universal Watermark & Document Sanitizer Engine.
+Designed to pair with Ghost PDF Studio (pdf_engine).
 
 Capabilities:
-1. PDF Structural & Text Watermark Stripping (Lossless vector & text redaction).
-2. Physical Paper Tracking Dot Neutralizer (Erases Machine Identification Codes / Yellow Dots from color scans).
-3. Digital Steganography & Invisible Mark Disruptor (2D FFT phase dithering & LSB payload clearing).
-4. Visible Logo & Stamp Content-Aware Inpainting (Pure local NumPy/Pillow texture diffusion).
-5. Comprehensive Audit Evidence Provenance.
+1. PDF Universal Watermark Purge:
+   - Stream-level marked content excision (/CPDFSTAMP, /Artifact, /Watermark).
+   - Form XObject & /SMask dissection and stream unlinking.
+   - Vector drawing path scrubbing (Bézier curves, transparent diagonal banners).
+   - Low-contrast / faint-opacity background text neutralization.
+   - Scanned page raster watermark filtering (color/gray bleach & paper flat-fielding).
+   - OCG layer & annotation stamp stripping.
+   - Tracking metadata clearing.
+2. Microsoft Office Document Sanitization:
+   - DOCX: WordArt VML shapes, PowerPlusWatermarkObject, and DrawingML watermarks.
+   - PPTX: Master slide & layout watermark shapes.
+   - XLSX: Worksheet background picture watermarks.
+3. Physical Paper Tracking Dot Neutralizer:
+   - Erases Machine Identification Codes (MIC / Yellow laser printer tracking dots).
+4. Digital Steganography Disruptor:
+   - 2D FFT phase dithering & LSB payload clearing.
+5. Content-Aware Texture Inpainting:
+   - Harmonic Laplacian diffusion for visible stamps, logos, and overlays.
+6. Unified Auto-Routing Controller:
+   - Automatically sanitizes PDF, DOCX, PPTX, XLSX, and standalone images.
 """
 
 import os
@@ -17,6 +32,7 @@ import math
 import argparse
 import json
 import io
+import zipfile
 from typing import Union, List, Tuple, Dict, Any, Optional
 
 import numpy as np
@@ -28,15 +44,16 @@ DEFAULT_WATERMARK_KEYWORDS = [
     "confidential", "draft", "sample", "watermark", "preview",
     "do not copy", "proprietary", "copyright", "strictly private",
     "internal use only", "for evaluation only", "downloaded from",
-    "arxiv:", "ieeexplore", "researchgate", "springer", "sciencedirect"
+    "arxiv:", "ieeexplore", "researchgate", "springer", "sciencedirect",
+    "getmyuni", "studocu", "coursehero", "chegg", "scribd"
 ]
 
 
 class PaperSanitizer:
     """
     Physical document and scan sanitization.
-    Specializes in neutralizing Machine Identification Codes (MIC / Yellow laser printer tracking dots)
-    and flattening uneven scanner shadows / paper tints.
+    Specializes in neutralizing Machine Identification Codes (MIC / Yellow laser printer tracking dots),
+    flattening uneven scanner shadows / paper tints, and bleaching scanned raster watermarks.
     """
 
     @staticmethod
@@ -61,25 +78,19 @@ class PaperSanitizer:
         rg_min = np.minimum(r, g)
         yellow_contrast = rg_min - b
 
-        # Dots typically exist on light paper backgrounds (rg_min > 180)
+        # Dots typically exist on light paper backgrounds (rg_min > 160)
         paper_mask = (rg_min > 160)
         
         # Calculate dynamic threshold from the image background
-        mean_contrast = np.mean(yellow_contrast[paper_mask]) if np.any(paper_mask) else 0.0
-        std_contrast = np.std(yellow_contrast[paper_mask]) if np.any(paper_mask) else 1.0
+        mean_contrast = float(np.mean(yellow_contrast[paper_mask])) if np.any(paper_mask) else 0.0
+        std_contrast = float(np.std(yellow_contrast[paper_mask])) if np.any(paper_mask) else 1.0
         threshold = max(18.0, mean_contrast + sensitivity * std_contrast)
 
         # Potential dot mask
         dot_candidates = paper_mask & (yellow_contrast > threshold)
 
-        # Micro-filter: Yellow dots are small isolated clusters (1 to 6 pixels in diameter).
-        # We perform local neighborhood check to avoid touching large legitimate yellow artwork.
-        dot_mask = np.zeros_like(dot_candidates, dtype=bool)
-        h, w = dot_candidates.shape
-
-        # Use 5x5 window density: dots have low local density (< 12 pixels in a 5x5 area)
-        from PIL import Image as PilImg
-        cand_img = PilImg.fromarray(dot_candidates.astype(np.uint8) * 255)
+        # Micro-filter: Yellow dots are small isolated clusters (1 to 6 pixels in diameter)
+        cand_img = Image.fromarray(dot_candidates.astype(np.uint8) * 255)
         # 3x3 box blur to check neighborhood density
         density = np.array(cand_img.filter(ImageFilter.BoxBlur(1)), dtype=np.float32) / 255.0
         
@@ -92,7 +103,6 @@ class PaperSanitizer:
 
         # Neutralize: replace the blue channel with min(r, g) so yellow tint becomes white/neutral
         cleaned_arr = arr.copy()
-        # Smoothly interpolate blue channel to match surrounding neighborhood
         cleaned_b = cleaned_arr[:, :, 2]
         cleaned_b[dot_mask] = rg_min[dot_mask]
         cleaned_arr[:, :, 2] = cleaned_b
@@ -109,18 +119,53 @@ class PaperSanitizer:
         img_rgb = image.convert("RGB")
         arr = np.array(img_rgb, dtype=np.float32)
 
-        # Grayscale luminance
         lum = 0.299 * arr[:, :, 0] + 0.587 * arr[:, :, 1] + 0.114 * arr[:, :, 2]
-
-        # Background mask (light areas)
         bg_mask = lum >= paper_threshold
 
-        # Push near-white background smoothly to pure 255
         scale = np.clip((lum - paper_threshold) / (255.0 - paper_threshold + 1e-5), 0.0, 1.0)
         scale = np.expand_dims(scale, axis=2)
 
         cleaned_arr = arr * (1.0 - scale * bg_mask[:, :, None]) + 255.0 * (scale * bg_mask[:, :, None])
         return Image.fromarray(np.clip(cleaned_arr, 0, 255).astype(np.uint8), mode="RGB")
+
+    @staticmethod
+    def bleach_scanned_watermarks(image: Image.Image) -> Tuple[Image.Image, int]:
+        """
+        Bleaches semi-transparent color stamps (red/pink/blue) and faint gray watermarks
+        baked into scanned pages, while keeping dark ink, text lines, and diagrams 100% preserved.
+        """
+        img_rgb = image.convert("RGB")
+        arr = np.array(img_rgb, dtype=np.float32)
+
+        r = arr[:, :, 0]
+        g = arr[:, :, 1]
+        b = arr[:, :, 2]
+
+        lum = 0.299 * r + 0.587 * g + 0.114 * b
+        chroma = np.maximum(np.abs(r - g), np.maximum(np.abs(r - b), np.abs(g - b)))
+
+        # 1. Color watermarks on light paper (pink, red, purple, blue stamps)
+        color_wm = (lum > 135.0) & (chroma > 18.0)
+
+        # 2. Faint gray watermarks (lum between 195 and 238 with low chroma)
+        gray_wm = (lum >= 195.0) & (lum <= 238.0) & (chroma <= 15.0)
+
+        wm_mask = color_wm | gray_wm
+        count_bleached = int(np.sum(wm_mask))
+
+        if count_bleached == 0:
+            return image, 0
+
+        cleaned_arr = arr.copy()
+        # Bleach watermark areas to white
+        cleaned_arr[wm_mask] = 255.0
+
+        # Push any near-white paper background (> 238) smoothly to 255
+        bg_mask = lum > 238.0
+        cleaned_arr[bg_mask] = 255.0
+
+        cleaned_img = Image.fromarray(np.clip(cleaned_arr, 0, 255).astype(np.uint8), mode="RGB")
+        return cleaned_img, count_bleached
 
 
 class SteganographySanitizer:
@@ -134,9 +179,8 @@ class SteganographySanitizer:
     def neutralize_frequency_watermarks(image: Image.Image, strength: float = 0.04) -> Image.Image:
         """
         Disrupts frequency-domain invisible watermarks using 2D FFT phase dithering.
-        Invisible watermarks rely on precise phase coherence in mid-to-high frequency bands.
-        Adding micro-dither to frequency phases destroys the watermark correlation detector
-        while remaining completely imperceptible to human eyes.
+        Adds micro-dither to frequency phases to destroy correlation detection
+        while remaining imperceptible to human eyes.
         """
         img_rgb = image.convert("RGB")
         arr = np.array(img_rgb, dtype=np.float64)
@@ -151,22 +195,19 @@ class SteganographySanitizer:
             magnitude = np.abs(fshift)
             phase = np.angle(fshift)
 
-            # High-pass / mid-band mask: leave DC and low frequencies completely untouched
             y, x = np.ogrid[:h, :w]
             center_y, center_x = h // 2, w // 2
             dist_from_center = np.sqrt((x - center_x) ** 2 + (y - center_y) ** 2)
             max_dist = np.sqrt(center_x ** 2 + center_y ** 2)
             normalized_dist = dist_from_center / (max_dist + 1e-5)
 
-            # Dither target: mid and high frequencies (> 0.08 normalized radius)
+            # Dither mid and high frequencies (> 0.08 normalized radius)
             dither_mask = (normalized_dist > 0.08).astype(np.float64)
 
-            # Deterministic pseudo-random micro phase shift
             rng = np.random.default_rng(seed=42 + ch)
             noise = rng.uniform(-strength * math.pi, strength * math.pi, size=(h, w))
             new_phase = phase + noise * dither_mask
 
-            # Reconstruct complex spectrum
             fshift_modified = magnitude * np.exp(1j * new_phase)
             f_ishift = np.fft.ifftshift(fshift_modified)
             restored = np.fft.ifft2(f_ishift)
@@ -179,16 +220,14 @@ class SteganographySanitizer:
     def clear_lsb_payload(image: Image.Image, bits: int = 2) -> Image.Image:
         """
         Clears or dithers the least significant bits (LSB) across all channels,
-        erasing hidden steganographic data payloads (StegHide, OpenStego, LSB injection).
+        erasing hidden steganographic data payloads.
         """
         bits = max(1, min(4, bits))
         arr = np.array(image.convert("RGB"), dtype=np.uint8)
 
         mask = np.uint8((0xFF << bits) & 0xFF)
-        # Clears lower bits
         cleaned_arr = arr & mask
 
-        # Add subtle randomized rounding to prevent flat quantization bands
         rng = np.random.default_rng(seed=1337)
         dither = rng.integers(0, 1 << bits, size=arr.shape, dtype=np.uint8)
         cleaned_arr = cleaned_arr | dither
@@ -207,11 +246,6 @@ class InpaintingSanitizer:
     def inpaint(image: Image.Image, mask: np.ndarray, iterations: int = 15) -> Image.Image:
         """
         Inpaints masked regions (where mask > 0) by smoothly diffusing boundary textures inward.
-        
-        Args:
-            image: PIL Image
-            mask: 2D uint8 numpy array with shape (H, W), where 255 = watermark, 0 = keep
-            iterations: Number of diffusion passes
         """
         img_rgb = image.convert("RGB")
         img_arr = np.array(img_rgb, dtype=np.float32)
@@ -221,7 +255,6 @@ class InpaintingSanitizer:
         if not np.any(mask_bool):
             return image
 
-        # Initialize hole with boundary mean color
         boundary_dilated = np.array(Image.fromarray(mask_bool.astype(np.uint8) * 255).filter(ImageFilter.MaxFilter(7))) > 0
         boundary_ring = boundary_dilated & (~mask_bool)
         
@@ -230,7 +263,6 @@ class InpaintingSanitizer:
             fill_val = np.mean(channel[boundary_ring]) if np.any(boundary_ring) else np.mean(channel)
             channel[mask_bool] = fill_val
 
-        # Iterative Laplace-style diffusion inside the mask
         kernel = np.array([[0.05, 0.2, 0.05],
                            [0.2,  0.0, 0.2],
                            [0.05, 0.2, 0.05]], dtype=np.float32)
@@ -238,7 +270,6 @@ class InpaintingSanitizer:
         for _ in range(iterations):
             for ch in range(c):
                 channel = img_arr[:, :, ch]
-                # Convolution with boundary reflection
                 padded = np.pad(channel, 1, mode='edge')
                 smoothed = (
                     kernel[0, 0] * padded[:-2, :-2] + kernel[0, 1] * padded[:-2, 1:-1] + kernel[0, 2] * padded[:-2, 2:] +
@@ -250,10 +281,159 @@ class InpaintingSanitizer:
         return Image.fromarray(np.clip(img_arr, 0, 255).astype(np.uint8), mode="RGB")
 
 
+class OfficeSanitizer:
+    """
+    Sanitizes Microsoft Office documents (DOCX, PPTX, XLSX) by directly parsing
+    and removing watermark objects, WordArt shapes, background pictures, and tracking XMLs
+    from the OpenXML zip archives.
+    """
+
+    @classmethod
+    def sanitize_docx(cls, data: bytes, keywords: Optional[List[str]] = None) -> Tuple[bytes, Dict[str, Any]]:
+        """
+        Removes WordArt watermarks, PowerPlusWatermarkObject, and DrawingML watermark headers.
+        """
+        kw_list = [k.lower() for k in (keywords or DEFAULT_WATERMARK_KEYWORDS)]
+        out_buf = io.BytesIO()
+        removed_count = 0
+
+        with zipfile.ZipFile(io.BytesIO(data), 'r') as zin, zipfile.ZipFile(out_buf, 'w', zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                content = zin.read(item.filename)
+                fname = item.filename.lower()
+
+                if fname.startswith("word/") and fname.endswith(".xml"):
+                    text = content.decode("utf-8", errors="ignore")
+
+                    # 1. Strip VML PowerPlusWatermark / WordArt shapes
+                    def check_vml_watermark(match):
+                        nonlocal removed_count
+                        block = match.group(0)
+                        block_lower = block.lower()
+                        if "watermark" in block_lower or any(k in block_lower for k in kw_list):
+                            removed_count += 1
+                            return ""
+                        return block
+
+                    text, c1 = re.subn(
+                        r'<w:pict\b[^>]*>.*?<v:shape\b[^>]*?(?:PowerPlusWatermark|WordArtWatermark|Watermark)[^>]*?>.*?</w:pict>',
+                        '',
+                        text,
+                        flags=re.DOTALL | re.IGNORECASE
+                    )
+                    removed_count += c1
+
+                    text = re.sub(
+                        r'<w:pict\b[^>]*>.*?</w:pict>',
+                        check_vml_watermark,
+                        text,
+                        flags=re.DOTALL | re.IGNORECASE
+                    )
+
+                    # 2. Strip DrawingML watermarks in headers/footers
+                    def check_drawing_watermark(match):
+                        nonlocal removed_count
+                        block = match.group(0)
+                        block_lower = block.lower()
+                        if "watermark" in block_lower or any(k in block_lower for k in kw_list):
+                            removed_count += 1
+                            return ""
+                        return block
+
+                    text = re.sub(
+                        r'<w:drawing\b[^>]*>.*?</w:drawing>',
+                        check_drawing_watermark,
+                        text,
+                        flags=re.DOTALL | re.IGNORECASE
+                    )
+
+                    content = text.encode("utf-8")
+
+                zout.writestr(item, content)
+
+        audit = {"docx_watermarks_removed": removed_count}
+        return out_buf.getvalue(), audit
+
+    @classmethod
+    def sanitize_pptx(cls, data: bytes, keywords: Optional[List[str]] = None) -> Tuple[bytes, Dict[str, Any]]:
+        """
+        Removes watermark shapes from slide masters, slide layouts, and presentation slides.
+        """
+        kw_list = [k.lower() for k in (keywords or DEFAULT_WATERMARK_KEYWORDS)]
+        out_buf = io.BytesIO()
+        removed_count = 0
+
+        with zipfile.ZipFile(io.BytesIO(data), 'r') as zin, zipfile.ZipFile(out_buf, 'w', zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                content = zin.read(item.filename)
+                fname = item.filename.lower()
+
+                if fname.startswith("ppt/") and fname.endswith(".xml"):
+                    text = content.decode("utf-8", errors="ignore")
+
+                    def check_slide_shape(match):
+                        nonlocal removed_count
+                        block = match.group(0)
+                        block_lower = block.lower()
+                        if "watermark" in block_lower or any(k in block_lower for k in kw_list):
+                            removed_count += 1
+                            return ""
+                        return block
+
+                    text = re.sub(
+                        r'<p:sp\b[^>]*>.*?</p:sp>',
+                        check_slide_shape,
+                        text,
+                        flags=re.DOTALL | re.IGNORECASE
+                    )
+
+                    content = text.encode("utf-8")
+
+                zout.writestr(item, content)
+
+        audit = {"pptx_watermarks_removed": removed_count}
+        return out_buf.getvalue(), audit
+
+    @classmethod
+    def sanitize_xlsx(cls, data: bytes) -> Tuple[bytes, Dict[str, Any]]:
+        """
+        Removes worksheet background picture watermarks from Excel workbooks.
+        """
+        out_buf = io.BytesIO()
+        removed_count = 0
+
+        with zipfile.ZipFile(io.BytesIO(data), 'r') as zin, zipfile.ZipFile(out_buf, 'w', zipfile.ZIP_DEFLATED) as zout:
+            for item in zin.infolist():
+                content = zin.read(item.filename)
+                fname = item.filename.lower()
+
+                if fname.startswith("xl/worksheets/") and fname.endswith(".xml"):
+                    text = content.decode("utf-8", errors="ignore")
+
+                    # Strip background sheet picture element
+                    text, c1 = re.subn(r'<picture\s+[^>]*?/>', '', text, flags=re.DOTALL)
+                    removed_count += c1
+
+                    content = text.encode("utf-8")
+
+                zout.writestr(item, content)
+
+        audit = {"xlsx_watermarks_removed": removed_count}
+        return out_buf.getvalue(), audit
+
+
 class PDFWatermarkSanitizer:
     """
-    Deep PDF structural and visual watermark remover.
-    Handles vector objects, diagonal text, annotations, OCG layers, and metadata.
+    Universal PDF Structural, Vector, and Visual Watermark Remover.
+    Handles:
+    - Syntax-level marked-content excision (/CPDFSTAMP, /Artifact, /Watermark).
+    - Header discriminator: preserves legitimate document headers while stripping tracking hashes.
+    - Document-wide and page-level Form XObject unlinking & clearing.
+    - Vector drawing watermark path scrubbing (Bézier curves, transparent banners).
+    - Low-contrast faint text detection and excision.
+    - Scanned page raster watermark filtering and scanner flattening.
+    - OCG layer deactivation and annotation stamp removal.
+    - Tracking metadata purging.
     """
 
     def __init__(self, keywords: Optional[List[str]] = None):
@@ -284,7 +464,7 @@ class PDFWatermarkSanitizer:
         # Check for continuous hex tracking tokens or repeating hashes
         for token in full_text.split():
             clean_tok = re.sub(r'[^A-Za-z0-9]', '', token)
-            # Long pure hex token >= 20 characters is a tracking hash
+            # Pure hex token >= 20 chars is a tracking hash
             if len(clean_tok) >= 20 and re.fullmatch(r'[0-9A-Fa-f]+', clean_tok):
                 return True
             # Repeating substring token
@@ -303,19 +483,23 @@ class PDFWatermarkSanitizer:
         doc: pymupdf.Document,
         remove_text: bool = True,
         remove_annots: bool = True,
+        remove_vectors: bool = True,
         remove_layers: bool = True,
         strip_metadata: bool = True,
-        sanitize_images: bool = False,
+        sanitize_images: bool = True,
+        flatten_scanned: bool = True,
         progress_callback = None
     ) -> Dict[str, Any]:
         """
         Executes a comprehensive watermark purge across all PDF pages.
-        Returns detailed audit metrics.
+        Guarantees that NO PDF type is skipped.
         """
         audit = {
             "text_watermarks_removed": 0,
             "annotations_removed": 0,
             "ocg_layers_removed": 0,
+            "vector_paths_removed": 0,
+            "xobjects_cleared": 0,
             "images_sanitized": 0,
             "metadata_cleared": False
         }
@@ -341,13 +525,12 @@ class PDFWatermarkSanitizer:
                 for xref, ocg_dict in ocgs.items():
                     name = str(ocg_dict.get("name", "")).lower()
                     if any(w in name for w in ["watermark", "draft", "stamp", "background"]):
-                        # Disable/remove the layer
                         doc.set_ocg(xref, on=False)
                         audit["ocg_layers_removed"] += 1
             except Exception:
                 pass
 
-        # 3. Discover Document-Wide Watermark XObjects (e.g. semi-transparent Form4/Im1 overlays)
+        # 3. Discover Document-Wide Watermark XObjects (Forms & SMasks)
         watermark_xobjects = set()
         watermark_xrefs = set()
         try:
@@ -355,20 +538,35 @@ class PDFWatermarkSanitizer:
                 for x in p.get_xobjects():
                     x_xref, x_name = x[0], x[1]
                     obj_str = doc.xref_object(x_xref)
+                    is_wm = False
+
                     if "/SMask" in obj_str:
+                        is_wm = True
+                    elif "/Subtype /Form" in obj_str:
+                        try:
+                            form_stream = doc.xref_stream(x_xref).decode("latin1", errors="ignore")
+                            form_lower = form_stream.lower()
+                            if any(t in form_lower for t in ["watermark", "stamp", "draft", "cpdfstamp", "/smask"]):
+                                is_wm = True
+                            elif any(kw in form_lower for kw in self.keywords):
+                                is_wm = True
+                            # Check if the Form sets low opacity /CA or /ca < 0.75
+                            elif "/ca " in form_stream or "/CA " in form_stream or "/GS" in form_stream:
+                                if any(t in form_lower for t in ["/im", "/cp"]):
+                                    is_wm = True
+                        except Exception:
+                            pass
+
+                    if is_wm:
                         watermark_xobjects.add(x_name)
                         watermark_xrefs.add(x_xref)
-                    elif "/Subtype /Form" in obj_str:
-                        form_stream = doc.xref_stream(x_xref).decode("latin1", errors="ignore")
-                        if any(t in form_stream for t in ["/Im", "/gs", "/CPDFSTAMP", "Watermark", "Stamp", "watermark", "stamp"]):
-                            watermark_xobjects.add(x_name)
-                            watermark_xrefs.add(x_xref)
         except Exception:
             pass
 
         # 4. Process each page
         processed_xrefs = set()
         total_pages = len(doc)
+
         for page_idx in range(total_pages):
             if progress_callback:
                 try:
@@ -386,34 +584,66 @@ class PDFWatermarkSanitizer:
                         page.delete_annot(annot)
                         audit["annotations_removed"] += 1
 
-            # B. Stream-Level Watermark Excision (Lossless Text/Watermark Stripping)
-            # Removes watermark operators directly from the PDF content stream so that NO
-            # white redaction rectangles are ever drawn over real document text or formulas!
-            if remove_text or remove_layers:
-                # Detect any diagonal or semi-transparent watermark strings on this page
-                dynamic_watermark_terms = set(self.keywords)
+            # B. Detect Dynamic Watermark Terms & Low-Contrast Text on this page
+            dynamic_watermark_terms = set(self.keywords)
+            try:
+                raw_dict = page.get_text("rawdict")
+                for b in raw_dict.get("blocks", []):
+                    if "lines" not in b:
+                        continue
+                    for l in b.get("lines", []):
+                        dir_x, dir_y = l.get("dir", (1.0, 0.0))
+                        is_diagonal = abs(dir_y) > 0.05 and abs(dir_x) > 0.05
+                        line_text = "".join(s.get("text", "") for s in l.get("spans", [])).strip()
+
+                        for s in l.get("spans", []):
+                            alpha = s.get("alpha", 255)
+                            c_int = s.get("color", 0)
+                            r = (c_int >> 16) & 0xFF
+                            g = (c_int >> 8) & 0xFF
+                            b_col = c_int & 0xFF
+                            lum = 0.299 * r + 0.587 * g + 0.114 * b_col
+                            size = s.get("size", 10.0)
+
+                            # Faint gray or high transparency
+                            is_faint = (185 < lum < 245 and abs(r - g) < 20 and abs(g - b_col) < 20) or (0 < alpha < 180)
+
+                            if (is_diagonal or is_faint) and len(line_text) >= 3:
+                                dynamic_watermark_terms.add(line_text.lower())
+                                for word in line_text.lower().split():
+                                    if len(word) >= 4:
+                                        dynamic_watermark_terms.add(word)
+            except Exception:
+                pass
+
+            # C. Detect Vector Drawing Watermark Paths
+            has_vector_watermark = False
+            if remove_vectors:
                 try:
-                    raw_dict = page.get_text("rawdict")
-                    for b in raw_dict.get("blocks", []):
-                        if "lines" not in b:
-                            continue
-                        for l in b.get("lines", []):
-                            dir_x, dir_y = l.get("dir", (1.0, 0.0))
-                            is_diagonal = abs(dir_y) > 0.05 and abs(dir_x) > 0.05
-                            line_text = "".join(s.get("text", "") for s in l.get("spans", [])).strip()
-                            for s in l.get("spans", []):
-                                alpha = s.get("alpha", 255)
-                                if (is_diagonal or (0 < alpha < 180)) and len(line_text) >= 3:
-                                    dynamic_watermark_terms.add(line_text.lower())
+                    drawings = page.get_drawings()
+                    for d in drawings:
+                        r = d.get("rect", pymupdf.Rect())
+                        fo = d.get("fill_opacity", 1.0)
+                        so = d.get("stroke_opacity", 1.0)
+                        is_large = (r.width > page.rect.width * 0.35) and (r.height > page.rect.height * 0.25)
+                        is_transparent = (fo is not None and fo < 0.65) or (so is not None and so < 0.65)
+                        fill = d.get("fill")
+                        is_faint_fill = fill and all(c > 0.75 for c in fill)
+
+                        if is_large and (is_transparent or is_faint_fill):
+                            has_vector_watermark = True
+                            audit["vector_paths_removed"] += 1
                 except Exception:
                     pass
 
+            # D. Stream-Level Excision (Lossless Vector, Form, and Text Watermark Stripping)
+            if remove_text or remove_layers or remove_vectors:
                 for cxref in page.get_contents():
                     try:
                         raw_stream = doc.xref_stream(cxref).decode("latin1", errors="ignore")
                         modified_stream = raw_stream
 
-                        # 1. Selectively strip marked content watermark stamps without removing legitimate headers
+                        # 1. Marked Content Stamps
                         def clean_marked_content_block(match):
                             block = match.group(0)
                             return "" if self.is_watermark_marked_content(block) else block
@@ -426,7 +656,7 @@ class PDFWatermarkSanitizer:
                         )
                         audit["text_watermarks_removed"] += count1
 
-                        # 2. Strip marked content artifacts with /Watermark or /Background subtype
+                        # 2. Marked Content Artifacts
                         modified_stream, count2 = re.subn(
                             r'/(?:Artifact|Private)\s*<<[^>]*?(?:Watermark|Background)[^>]*?>>\s*(?:BMC|BDC).*?EMC',
                             '',
@@ -435,14 +665,30 @@ class PDFWatermarkSanitizer:
                         )
                         audit["text_watermarks_removed"] += count2
 
-                        # 3. Strip invocations of detected watermark XObjects/Forms
+                        # 3. Strip invocations of detected Watermark XObjects/Forms
                         for wm_name in watermark_xobjects:
                             pattern = rf'q\s+[^Q]*?/{re.escape(wm_name)}\s+Do\s+Q'
                             modified_stream, count_x = re.subn(pattern, '', modified_stream, flags=re.DOTALL)
                             audit["text_watermarks_removed"] += count_x
                             modified_stream = re.sub(rf'/{re.escape(wm_name)}\s+Do', '', modified_stream)
 
-                        # 4. Strip BT...ET text blocks containing watermark keywords or repeating tracking hashes
+                        # 4. Vector Drawing Paths with Transparency
+                        if has_vector_watermark:
+                            def clean_vector_block(match):
+                                block = match.group(0)
+                                # If block contains text operators, preserve it
+                                if any(t in block for t in ["BT", "ET", "Tj", "TJ"]):
+                                    return block
+                                # If it sets low alpha /ca or /CA or gs, and has path operators (re, m, l, c, h)
+                                if any(t in block for t in ["/fitzca", "/ca", "/CA", "gs"]) and any(p in block for p in ["re", " m ", " l ", " c ", " B", " f"]):
+                                    return ""
+                                return block
+
+                            modified_stream_vec = re.sub(r'q\s+[^Q]*?Q', clean_vector_block, modified_stream, flags=re.DOTALL)
+                            if modified_stream_vec != modified_stream:
+                                modified_stream = modified_stream_vec
+
+                        # 5. BT...ET Text Blocks
                         def decode_pdf_stream_text(stream_text: str) -> str:
                             def hex_repl(m):
                                 try:
@@ -454,15 +700,18 @@ class PDFWatermarkSanitizer:
                         def clean_bt_et(match):
                             block = match.group(0)
                             decoded = decode_pdf_stream_text(block).lower()
-                            # Check watermark keywords & dynamic terms
+
+                            # Check keywords & dynamic terms
                             if any(kw in decoded for kw in dynamic_watermark_terms):
                                 return ""
+
                             # Check repeating tracking tokens (e.g. university exam paper hashes)
                             cleaned_alnum = re.sub(r'[^a-z0-9]', '', decoded)
                             if len(cleaned_alnum) >= 40:
                                 chunk = cleaned_alnum[:24]
                                 if cleaned_alnum.count(chunk) >= 2:
                                     return ""
+
                             return block
 
                         modified_stream_bt = re.sub(r'BT\b.*?ET', clean_bt_et, modified_stream, flags=re.DOTALL)
@@ -475,55 +724,59 @@ class PDFWatermarkSanitizer:
                     except Exception:
                         pass
 
-        # 5. Empty the stream of any identified watermark XObjects
-        for x_xref in watermark_xrefs:
-            try:
-                doc.update_stream(x_xref, b"")
-            except Exception:
-                pass
+            # E. Embedded Raster Images & Scanned Page Fallback
+            page_text_len = len(page.get_text().strip())
+            is_scanned_page = (page_text_len < 30)
 
-            # C. Targeted Keyword Quads (Only for any remaining non-stream annotations)
-            if remove_text:
-                has_quad_redactions = False
-                for kw in self.keywords:
-                    quad_matches = page.search_for(kw, quads=True)
-                    for q in quad_matches:
-                        page.add_redact_annot(quad=q, fill=(1, 1, 1))
-                        audit["text_watermarks_removed"] += 1
-                        has_quad_redactions = True
-                if has_quad_redactions:
-                    page.apply_redactions()
-
-            # D. Embedded Images Sanitization (Deduplicated across pages, skipped for small icons)
-            if sanitize_images:
+            if sanitize_images or (flatten_scanned and is_scanned_page):
                 for img_info in page.get_images(full=True):
                     xref = img_info[0]
                     if xref in processed_xrefs:
                         continue
                     processed_xrefs.add(xref)
+
                     try:
                         base_image = doc.extract_image(xref)
                         if not base_image or "image" not in base_image:
                             continue
-                        
+
                         w = base_image.get("width", 0)
                         h = base_image.get("height", 0)
-                        # Skip tiny icons, bullets, and glyphs
-                        if w < 150 or h < 150:
+                        if w < 120 or h < 120:
                             continue
-                        
-                        img_bytes = base_image["image"]
-                        pil_img = Image.open(io.BytesIO(img_bytes))
 
-                        # Clean printer tracking dots if present
-                        clean_img, dots_cleaned = PaperSanitizer.remove_printer_tracking_dots(pil_img)
-                        if dots_cleaned > 0:
+                        img_bytes = base_image["image"]
+                        pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+                        image_modified = False
+
+                        # 1. Printer tracking dots
+                        clean_dots_img, dots = PaperSanitizer.remove_printer_tracking_dots(pil_img)
+                        if dots > 0:
+                            pil_img = clean_dots_img
+                            image_modified = True
+
+                        # 2. Bleach scanned watermark & flatten background
+                        if flatten_scanned:
+                            bleached_img, bleached_count = PaperSanitizer.bleach_scanned_watermarks(pil_img)
+                            if bleached_count > 0:
+                                pil_img = bleached_img
+                                image_modified = True
+
+                        if image_modified:
                             buf = io.BytesIO()
-                            clean_img.save(buf, format="PNG")
+                            pil_img.save(buf, format="PNG")
                             page.replace_image(xref, stream=buf.getvalue())
                             audit["images_sanitized"] += 1
                     except Exception:
                         pass
+
+        # 5. Empty the stream of any identified Watermark XObjects
+        for x_xref in watermark_xrefs:
+            try:
+                doc.update_stream(x_xref, b"")
+                audit["xobjects_cleared"] += 1
+            except Exception:
+                pass
 
         return audit
 
@@ -531,9 +784,118 @@ class PDFWatermarkSanitizer:
 class UniversalSanitizer:
     """
     Unified Front Controller:
-    Detects file types (PDF vs Image) and orchestrates structural, optical,
-    and steganographic sanitization pipelines.
+    Detects file types (PDF, DOCX, PPTX, XLSX, PNG, JPG, WEBP, TIFF, BMP)
+    and orchestrates structural, optical, and steganographic sanitization pipelines.
     """
+
+    @classmethod
+    def sanitize_bytes(
+        cls,
+        data: bytes,
+        filename: str = "document.pdf",
+        remove_text: bool = True,
+        remove_annots: bool = True,
+        remove_vectors: bool = True,
+        remove_dots: bool = True,
+        remove_stego: bool = True,
+        flatten_scanned: bool = True,
+        keywords: Optional[List[str]] = None,
+        inpaint_rect: Optional[Tuple[int, int, int, int]] = None
+    ) -> Tuple[bytes, Dict[str, Any]]:
+        """
+        Takes raw file bytes and filename, detects format, performs universal sanitization,
+        and returns (sanitized_bytes, audit_dict).
+        """
+        ext = os.path.splitext(filename)[1].lower() if filename else ".pdf"
+
+        # Magic bytes detection
+        if data.startswith(b"%PDF"):
+            ext = ".pdf"
+        elif data.startswith(b"PK\x03\x04"):
+            # Check zip contents for Office format
+            try:
+                with zipfile.ZipFile(io.BytesIO(data), 'r') as z:
+                    names = z.namelist()
+                    if any(n.startswith("word/") for n in names):
+                        ext = ".docx"
+                    elif any(n.startswith("ppt/") for n in names):
+                        ext = ".pptx"
+                    elif any(n.startswith("xl/") for n in names):
+                        ext = ".xlsx"
+            except Exception:
+                pass
+        elif data.startswith(b"\x89PNG") or data.startswith(b"\xff\xd8\xff") or data.startswith(b"RIFF") or data.startswith(b"BM"):
+            if ext not in [".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"]:
+                ext = ".png"
+
+        # Route 1: PDF Document
+        if ext == ".pdf":
+            doc = pymupdf.open(stream=data, filetype="pdf")
+            engine = PDFWatermarkSanitizer(keywords=keywords)
+            audit = engine.sanitize_pdf_document(
+                doc,
+                remove_text=remove_text,
+                remove_annots=remove_annots,
+                remove_vectors=remove_vectors,
+                remove_layers=True,
+                strip_metadata=True,
+                sanitize_images=remove_dots or remove_stego,
+                flatten_scanned=flatten_scanned
+            )
+            out_buf = io.BytesIO()
+            doc.save(out_buf, garbage=4, deflate=True)
+            doc.close()
+            return out_buf.getvalue(), audit
+
+        # Route 2: DOCX
+        elif ext == ".docx":
+            return OfficeSanitizer.sanitize_docx(data, keywords=keywords)
+
+        # Route 3: PPTX
+        elif ext == ".pptx":
+            return OfficeSanitizer.sanitize_pptx(data, keywords=keywords)
+
+        # Route 4: XLSX
+        elif ext == ".xlsx":
+            return OfficeSanitizer.sanitize_xlsx(data)
+
+        # Route 5: Images
+        elif ext in [".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"]:
+            img = Image.open(io.BytesIO(data))
+            audit = {
+                "tracking_dots_removed": 0,
+                "stego_neutralized": False,
+                "scanned_watermarks_bleached": 0,
+                "inpainting_applied": False
+            }
+
+            if remove_dots:
+                img, dots = PaperSanitizer.remove_printer_tracking_dots(img)
+                audit["tracking_dots_removed"] = dots
+
+            if flatten_scanned:
+                img, bleached = PaperSanitizer.bleach_scanned_watermarks(img)
+                audit["scanned_watermarks_bleached"] = bleached
+
+            if remove_stego:
+                img = SteganographySanitizer.neutralize_frequency_watermarks(img)
+                img = SteganographySanitizer.clear_lsb_payload(img, bits=1)
+                audit["stego_neutralized"] = True
+
+            if inpaint_rect:
+                x0, y0, x1, y1 = inpaint_rect
+                mask = np.zeros((img.height, img.width), dtype=np.uint8)
+                mask[y0:y1, x0:x1] = 255
+                img = InpaintingSanitizer.inpaint(img, mask)
+                audit["inpainting_applied"] = True
+
+            out_buf = io.BytesIO()
+            fmt = "PNG" if ext in [".png", ".webp", ".bmp"] else "JPEG"
+            img.save(out_buf, format=fmt)
+            return out_buf.getvalue(), audit
+
+        else:
+            raise ValueError(f"Unsupported file format: {ext}")
 
     @classmethod
     def process_file(
@@ -542,107 +904,69 @@ class UniversalSanitizer:
         output_path: Optional[str] = None,
         remove_tracking_dots: bool = True,
         remove_stego: bool = True,
-        flatten_background: bool = False,
+        flatten_background: bool = True,
         keywords: Optional[List[str]] = None,
         inpaint_rect: Optional[Tuple[int, int, int, int]] = None
     ) -> Dict[str, Any]:
         """
-        Sanitizes a PDF or image file from disk and writes the cleaned file to output_path.
+        Sanitizes a file on disk (PDF, Office, or Image) and writes the cleaned file to output_path.
         """
         if not os.path.exists(input_path):
             raise FileNotFoundError(f"Input file not found: {input_path}")
 
-        ext = os.path.splitext(input_path)[1].lower()
+        base, ext = os.path.splitext(input_path)
         if output_path is None:
-            base, ext_out = os.path.splitext(input_path)
-            output_path = f"{base}_clean{ext_out}"
+            output_path = f"{base}_clean{ext}"
 
-        report = {
+        with open(input_path, "rb") as f:
+            raw_bytes = f.read()
+
+        clean_bytes, audit = cls.sanitize_bytes(
+            raw_bytes,
+            filename=input_path,
+            remove_text=True,
+            remove_annots=True,
+            remove_vectors=True,
+            remove_dots=remove_tracking_dots,
+            remove_stego=remove_stego,
+            flatten_scanned=flatten_background,
+            keywords=keywords,
+            inpaint_rect=inpaint_rect
+        )
+
+        with open(output_path, "wb") as f:
+            f.write(clean_bytes)
+
+        return {
             "input_file": input_path,
             "output_file": output_path,
-            "type": "unknown",
-            "audit": {}
+            "type": ext.lstrip(".").lower(),
+            "audit": audit
         }
-
-        # Route 1: PDF Document
-        if ext == ".pdf":
-            report["type"] = "pdf"
-            doc = pymupdf.open(input_path)
-            engine = PDFWatermarkSanitizer(keywords=keywords)
-            audit = engine.sanitize_pdf_document(
-                doc,
-                remove_text=True,
-                remove_annots=True,
-                remove_layers=True,
-                strip_metadata=True,
-                sanitize_images=remove_tracking_dots or remove_stego
-            )
-            # Save PDF cleanly with deflated streams
-            doc.save(output_path, garbage=4, deflate=True)
-            doc.close()
-            report["audit"] = audit
-
-        # Route 2: Image / Scan (JPG, PNG, WEBP, TIFF)
-        elif ext in [".jpg", ".jpeg", ".png", ".webp", ".tif", ".tiff", ".bmp"]:
-            report["type"] = "image"
-            img = Image.open(input_path)
-            audit = {"tracking_dots_removed": 0, "stego_neutralized": False, "inpainting_applied": False}
-
-            # 1. Printer tracking dots
-            if remove_tracking_dots:
-                img, dots = PaperSanitizer.remove_printer_tracking_dots(img)
-                audit["tracking_dots_removed"] = dots
-
-            # 2. Scanner background flattening
-            if flatten_background:
-                img = PaperSanitizer.flatten_scanner_background(img)
-                audit["background_flattened"] = True
-
-            # 3. Frequency steganography & LSB
-            if remove_stego:
-                img = SteganographySanitizer.neutralize_frequency_watermarks(img)
-                img = SteganographySanitizer.clear_lsb_payload(img, bits=1)
-                audit["stego_neutralized"] = True
-
-            # 4. Inpainting rectangle (if specified)
-            if inpaint_rect:
-                x0, y0, x1, y1 = inpaint_rect
-                mask = np.zeros((img.height, img.width), dtype=np.uint8)
-                mask[y0:y1, x0:x1] = 255
-                img = InpaintingSanitizer.inpaint(img, mask)
-                audit["inpainting_applied"] = True
-
-            img.save(output_path)
-            report["audit"] = audit
-
-        else:
-            raise ValueError(f"Unsupported file format: {ext}")
-
-        return report
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Ghost Sanitizer: Universal Watermark & Document Steganography Remover",
+        description="Ghost Universal Sanitizer: Watermark & Steganography Remover (PDF, Office, Images)",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("input", help="Path to input PDF or Image file")
+    parser.add_argument("input", help="Path to input PDF, DOCX, PPTX, XLSX, or Image file")
     parser.add_argument("-o", "--output", help="Path to save sanitized output file")
     parser.add_argument("--all", action="store_true", help="Apply all sanitization passes")
     parser.add_argument("--dots", action="store_true", help="Neutralize laser printer tracking dots (MIC)")
     parser.add_argument("--stego", action="store_true", help="Disrupt digital invisible watermarks & LSB steganography")
-    parser.add_argument("--flatten-bg", action="store_true", help="Flatten paper background lighting & aging")
-    parser.add_argument("--keywords", nargs="+", help="Additional watermark keywords to purge from PDF")
+    parser.add_argument("--flatten-bg", action="store_true", help="Flatten paper background lighting & bleach scanned watermarks")
+    parser.add_argument("--keywords", nargs="+", help="Additional watermark keywords to purge")
     parser.add_argument("--inpaint-rect", nargs=4, type=int, metavar=("X0", "Y0", "X1", "Y1"),
                         help="Bounding box coordinates to content-aware inpaint")
     parser.add_argument("--json", action="store_true", help="Print audit report as JSON")
 
     args = parser.parse_args()
 
-    # Default to all if no specific flags provided
     apply_all = args.all or not (args.dots or args.stego or args.flatten_bg or args.inpaint_rect)
     remove_dots = args.dots or apply_all
     remove_stego = args.stego or apply_all
+    flatten_bg = args.flatten_bg or apply_all
 
     try:
         report = UniversalSanitizer.process_file(
@@ -650,7 +974,7 @@ def main():
             output_path=args.output,
             remove_tracking_dots=remove_dots,
             remove_stego=remove_stego,
-            flatten_background=args.flatten_bg,
+            flatten_background=flatten_bg,
             keywords=args.keywords,
             inpaint_rect=tuple(args.inpaint_rect) if args.inpaint_rect else None
         )

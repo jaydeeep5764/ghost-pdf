@@ -12,6 +12,7 @@ import pymupdf
 # Import the Universal PDF Engine
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from universal_engine import apply_universal_edit
+from watermark_engine import UniversalSanitizer, PDFWatermarkSanitizer
 
 PORT = 3000
 WEB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -44,102 +45,106 @@ def get_page_payload(pdf_bytes, page_idx=0):
     ph = page.rect.height
 
     text_data = page.get_text("dict")
-    spans = []
-    blocks_payload = []
-    span_id = 0
+    raw_words = page.get_text("words")
 
+    # Build spans lookup for style resolution
+    spans = []
+    for block in text_data.get("blocks", []):
+        if "lines" in block:
+            for line in block["lines"]:
+                for s in line["spans"]:
+                    spans.append(s)
+
+    def get_style_for_rect(bbox):
+        rect = pymupdf.Rect(bbox)
+        best = None
+        best_area = -1
+        for s in spans:
+            s_rect = pymupdf.Rect(s["bbox"])
+            inter = (rect & s_rect).get_area()
+            if inter > best_area:
+                best_area = inter
+                best = s
+        if best:
+            c_int = best["color"]
+            hex_color = f"#{(c_int>>16)&0xFF:02x}{(c_int>>8)&0xFF:02x}{c_int&0xFF:02x}"
+            return best["font"], round(best["size"], 1), hex_color, best["flags"]
+        return "helv", 11.0, "#000000", 0
+
+    # Words extraction
+    words = []
+    for idx, w in enumerate(raw_words):
+        w_bbox = [round(float(x), 2) for x in w[:4]]
+        w_text = w[4].strip()
+        if w_text:
+            f, sz, col, flg = get_style_for_rect(w_bbox)
+            words.append({
+                "id": f"w_{idx}",
+                "text": w_text,
+                "bbox": w_bbox,
+                "font": f,
+                "size": sz,
+                "color": col,
+                "flags": flg,
+                "block_idx": w[5],
+                "line_idx": w[6],
+                "word_idx": w[7]
+            })
+
+    # Lines & Blocks extraction
+    lines = []
+    line_id = 0
+    blocks = []
     for b_idx, block in enumerate(text_data.get("blocks", [])):
         if "lines" in block:
-            block_lines_text = []
+            b_line_texts = []
             for line in block["lines"]:
-                line_spans = []
-                for span in line["spans"]:
-                    txt = span["text"].strip()
-                    if txt:
-                        c_int = span["color"]
-                        r = ((c_int >> 16) & 0xFF)
-                        g = ((c_int >> 8) & 0xFF)
-                        b = (c_int & 0xFF)
-                        hex_color = f"#{r:02x}{g:02x}{b:02x}"
-                        
-                        s_data = {
-                            "id": span_id,
-                            "block_id": b_idx,
-                            "text": span["text"],
-                            "bbox": list(span["bbox"]),
-                            "origin": list(span["origin"]) if "origin" in span else None,
-                            "font": span["font"],
-                            "size": round(span["size"], 2),
-                            "color": hex_color,
-                            "flags": span["flags"]
-                        }
-                        spans.append(s_data)
-                        line_spans.append(s_data)
-                        span_id += 1
-                if line_spans:
-                    block_lines_text.append(" ".join(s["text"] for s in line_spans))
-
-            if block_lines_text:
-                spans_in_block = [s for l in block["lines"] for s in l.get("spans", []) if s["text"].strip()]
-                total_chars = 0
-                bold_chars = 0
-                italic_chars = 0
-                font_char_counts = {}
-                size_char_counts = {}
-                color_char_counts = {}
-
-                for s in spans_in_block:
-                    n = len(s["text"])
-                    total_chars += n
-                    f_clean = s["font"].lower()
-                    is_b = bool(s["flags"] & 16) or bool(re.search(r'[\-_ ]*(bold|heavy|black)', f_clean))
-                    is_i = bool(s["flags"] & 2) or bool(re.search(r'[\-_ ]*(italic|oblique)', f_clean))
-                    if is_b:
-                        bold_chars += n
-                    if is_i:
-                        italic_chars += n
-                    font_char_counts[s["font"]] = font_char_counts.get(s["font"], 0) + n
-                    size_char_counts[s["size"]] = size_char_counts.get(s["size"], 0) + n
-                    color_char_counts[s["color"]] = color_char_counts.get(s["color"], 0) + n
-
-                maj_font = max(font_char_counts.items(), key=lambda x: x[1])[0] if font_char_counts else "helv"
-                maj_size = round(max(size_char_counts.items(), key=lambda x: x[1])[0], 2) if size_char_counts else 10.0
-                maj_color_int = max(color_char_counts.items(), key=lambda x: x[1])[0] if color_char_counts else 0
-                r = ((maj_color_int >> 16) & 0xFF)
-                g = ((maj_color_int >> 8) & 0xFF)
-                b = (maj_color_int & 0xFF)
-                maj_color_hex = f"#{r:02x}{g:02x}{b:02x}"
-
-                is_maj_bold = (bold_chars / total_chars > 0.5) if total_chars else False
-                is_maj_italic = (italic_chars / total_chars > 0.5) if total_chars else False
-
-                b_x0 = min(s["bbox"][0] for s in spans_in_block) if spans_in_block else block["bbox"][0]
-                b_y0 = min(s["bbox"][1] for s in spans_in_block) if spans_in_block else block["bbox"][1]
-                b_x1 = max(s["bbox"][2] for s in spans_in_block) if spans_in_block else block["bbox"][2]
-                b_y1 = max(s["bbox"][3] for s in spans_in_block) if spans_in_block else block["bbox"][3]
-
-                blocks_payload.append({
-                    "id": b_idx,
-                    "bbox": [b_x0, b_y0, b_x1, b_y1],
-                    "text": "\n".join(block_lines_text),
-                    "line_count": len(block_lines_text),
-                    "font": maj_font,
-                    "size": maj_size,
-                    "flags": (16 if is_maj_bold else 0) | (2 if is_maj_italic else 0),
-                    "is_bold": is_maj_bold,
-                    "is_italic": is_maj_italic,
-                    "color": maj_color_hex
+                l_text = "".join(s["text"] for s in line["spans"]).strip()
+                if l_text:
+                    l_bbox = [round(float(x), 2) for x in line["bbox"]]
+                    f, sz, col, flg = get_style_for_rect(l_bbox)
+                    lines.append({
+                        "id": f"l_{line_id}",
+                        "text": l_text,
+                        "bbox": l_bbox,
+                        "font": f,
+                        "size": sz,
+                        "color": col,
+                        "flags": flg,
+                        "block_idx": b_idx
+                    })
+                    line_id += 1
+                    b_line_texts.append(l_text)
+            if b_line_texts:
+                b_text = "\n".join(b_line_texts)
+                b_bbox = [round(float(x), 2) for x in block["bbox"]]
+                f, sz, col, flg = get_style_for_rect(b_bbox)
+                blocks.append({
+                    "id": f"b_{b_idx}",
+                    "text": b_text,
+                    "bbox": b_bbox,
+                    "font": f,
+                    "size": sz,
+                    "color": col,
+                    "flags": flg
                 })
 
-    payload = {
-        "page_index": page_idx,
-        "total_pages": len(doc),
-        "width": page.rect.width,
-        "height": page.rect.height,
-        "image": f"data:image/png;base64,{img_base64}",
-        "spans": spans,
-        "blocks": blocks_payload
-    }
+    # Images extraction
+    images = []
+    for img_idx, img_info in enumerate(page.get_images()):
+        xref = img_info[0]
+        rects = page.get_image_rects(xref)
+        for r_idx, r in enumerate(rects):
+            images.append({
+                "id": f"img_{img_idx}_{r_idx}",
+                "xref": xref,
+                "bbox": [round(float(x), 2) for x in r],
+                "width": round(r.width, 2),
+                "height": round(r.height, 2),
+                "pixel_width": img_info[2],
+                "pixel_height": img_info[3]
+            })
+
     doc.close()
 
     can_undo = (HISTORY_INDEX > 0)
@@ -216,18 +221,146 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 req = json.loads(body.decode("utf-8"))
                 b64_data = req.get("pdf_base64", "")
+                filename = req.get("filename", "document.pdf")
                 if "," in b64_data:
                     b64_data = b64_data.split(",")[1]
-                pdf_data = base64.b64decode(b64_data)
-                
-                ACTIVE_PDF_BYTES = pdf_data
-                HISTORY = [ACTIVE_PDF_BYTES]
-                HISTORY_INDEX = 0
+                uploaded_bytes = base64.b64decode(b64_data)
 
-                data = get_page_payload(ACTIVE_PDF_BYTES, 0)
-                self.send_json({"status": "success", "data": data})
+                # Check format
+                ext = os.path.splitext(filename)[1].lower() if filename else ".pdf"
+                is_pdf = uploaded_bytes.startswith(b"%PDF") or ext == ".pdf"
+
+                if is_pdf:
+                    ACTIVE_PDF_BYTES = uploaded_bytes
+                    HISTORY = [ACTIVE_PDF_BYTES]
+                    HISTORY_INDEX = 0
+                    data = get_page_payload(ACTIVE_PDF_BYTES, 0)
+                    self.send_json({"status": "success", "file_type": "pdf", "data": data})
+                else:
+                    # Direct sanitization for DOCX, PPTX, XLSX, Images
+                    clean_bytes, audit = UniversalSanitizer.sanitize_bytes(uploaded_bytes, filename=filename)
+                    clean_b64 = base64.b64encode(clean_bytes).decode("ascii")
+                    base_name, file_ext = os.path.splitext(filename)
+                    out_name = f"{base_name}_clean{file_ext}"
+                    self.send_json({
+                        "status": "success",
+                        "file_type": ext.lstrip("."),
+                        "filename": out_name,
+                        "file_base64": clean_b64,
+                        "audit": audit
+                    })
             except Exception as e:
                 self.send_json({"status": "error", "message": str(e)}, status=400)
+            return
+
+
+        if url.path == "/api/sanitize":
+            content_length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(content_length)
+            try:
+                req = json.loads(body.decode("utf-8")) if body else {}
+                if ACTIVE_PDF_BYTES is None:
+                    self.send_json({"status": "error", "message": "No active PDF"}, status=400)
+                    return
+
+                p_idx = req.get("page_index", 0)
+                remove_text = req.get("remove_text", True)
+                remove_annots = req.get("remove_annots", True)
+                remove_vectors = req.get("remove_vectors", True)
+                remove_dots = req.get("remove_dots", True)
+                remove_stego = req.get("remove_stego", True)
+                flatten_scanned = req.get("flatten_scanned", True)
+                keywords = req.get("keywords", None)
+
+                clean_bytes, audit = UniversalSanitizer.sanitize_bytes(
+                    ACTIVE_PDF_BYTES,
+                    filename="document.pdf",
+                    remove_text=remove_text,
+                    remove_annots=remove_annots,
+                    remove_vectors=remove_vectors,
+                    remove_dots=remove_dots,
+                    remove_stego=remove_stego,
+                    flatten_scanned=flatten_scanned,
+                    keywords=keywords
+                )
+
+                ACTIVE_PDF_BYTES = clean_bytes
+
+                # Record in Undo History
+                HISTORY = HISTORY[:HISTORY_INDEX + 1]
+                HISTORY.append(ACTIVE_PDF_BYTES)
+                if len(HISTORY) > MAX_HISTORY:
+                    HISTORY.pop(0)
+                HISTORY_INDEX = len(HISTORY) - 1
+
+                new_data = get_page_payload(ACTIVE_PDF_BYTES, p_idx)
+                self.send_json({
+                    "status": "success",
+                    "audit": audit,
+                    "data": new_data
+                })
+            except Exception as e:
+                self.send_json({"status": "error", "message": str(e)}, status=500)
+            return
+
+        if url.path == "/api/detect_watermarks":
+            try:
+                if ACTIVE_PDF_BYTES is None:
+                    self.send_json({"status": "error", "message": "No active PDF"}, status=400)
+                    return
+
+                doc = pymupdf.open(stream=ACTIVE_PDF_BYTES, filetype="pdf")
+                total_pages = len(doc)
+                found_indicators = {
+                    "marked_content_stamps": 0,
+                    "form_xobjects": 0,
+                    "smask_overlays": 0,
+                    "diagonal_text": 0,
+                    "vector_paths": 0
+                }
+
+                for p in doc:
+                    for x in p.get_xobjects():
+                        x_xref = x[0]
+                        obj_str = doc.xref_object(x_xref)
+                        if "/SMask" in obj_str:
+                            found_indicators["smask_overlays"] += 1
+                        elif "/Subtype /Form" in obj_str:
+                            found_indicators["form_xobjects"] += 1
+
+                    for cxref in p.get_contents():
+                        raw_stream = doc.xref_stream(cxref).decode("latin1", errors="ignore")
+                        if "/CPDFSTAMP" in raw_stream:
+                            found_indicators["marked_content_stamps"] += len(re.findall(r'/CPDFSTAMP\b', raw_stream))
+
+                    try:
+                        raw_dict = p.get_text("rawdict")
+                        for b in raw_dict.get("blocks", []):
+                            for l in b.get("lines", []):
+                                dir_x, dir_y = l.get("dir", (1.0, 0.0))
+                                if abs(dir_y) > 0.05 and abs(dir_x) > 0.05:
+                                    found_indicators["diagonal_text"] += 1
+                    except Exception:
+                        pass
+
+                    try:
+                        drawings = p.get_drawings()
+                        for d in drawings:
+                            fo = d.get("fill_opacity", 1.0)
+                            so = d.get("stroke_opacity", 1.0)
+                            if (fo is not None and fo < 0.65) or (so is not None and so < 0.65):
+                                found_indicators["vector_paths"] += 1
+                    except Exception:
+                        pass
+
+                doc.close()
+                self.send_json({
+                    "status": "success",
+                    "total_pages": total_pages,
+                    "indicators": found_indicators
+                })
+            except Exception as e:
+                self.send_json({"status": "error", "message": str(e)}, status=500)
             return
 
         if url.path == "/api/apply_edit":
