@@ -495,9 +495,15 @@
 
             <div class="flex items-center justify-between gap-1 flex-wrap text-xs bg-slate-950 p-1.5 rounded-lg border border-slate-800">
                 <select id="editorFontFamily" class="bg-slate-800 text-slate-200 text-[11px] rounded px-1.5 py-1 border border-slate-700 focus:outline-none">
-                    <option value="helv">Sans-Serif (Helvetica)</option>
-                    <option value="times">Serif (Times)</option>
+                    <option value="helv">Sans-Serif (Arial / Helvetica)</option>
+                    <option value="times">Serif (Times New Roman)</option>
+                    <option value="calibri">Calibri</option>
                     <option value="courier">Monospace (Courier)</option>
+                    <optgroup label="✍️ Handwriting / Pen Styles">
+                        <option value="hand_script">Cursive Script (Segoe Script)</option>
+                        <option value="hand_ink">Ballpoint Pen (Ink Free)</option>
+                        <option value="hand_print">Print Handwriting (Segoe Print)</option>
+                    </optgroup>
                 </select>
 
                 <div class="flex items-center gap-0.5 bg-slate-800 rounded border border-slate-700 px-1 py-0.5">
@@ -1225,6 +1231,8 @@
                 color: item.color || '#000000',
                 font: item.font || 'helv',
                 flags: item.flags || 0,
+                is_bold: Boolean((item.flags || 0) & 16) || Boolean(item.is_bold),
+                is_italic: Boolean((item.flags || 0) & 2) || Boolean(item.is_italic),
                 width: pixelWidth,
                 height: pixelHeight
             };
@@ -1337,9 +1345,17 @@
 
         function updateFontFamilySelect(fontStr) {
             const f = (fontStr || '').toLowerCase();
-            if (f.includes('times') || f.includes('roman') || f.includes('serif')) {
+            if (f.includes('script') || f.includes('cursive') || f.includes('segoesc')) {
+                editorFontFamily.value = 'hand_script';
+            } else if (f.includes('ink') || f.includes('pen') || f.includes('casual')) {
+                editorFontFamily.value = 'hand_ink';
+            } else if (f.includes('hand_print') || f.includes('segoepr') || f.includes('neat_hand')) {
+                editorFontFamily.value = 'hand_print';
+            } else if (f.includes('calibri')) {
+                editorFontFamily.value = 'calibri';
+            } else if (f.includes('times') || f.includes('roman') || f.includes('serif') || f.includes('georgia')) {
                 editorFontFamily.value = 'times';
-            } else if (f.includes('courier') || f.includes('mono') || f.includes('dejavu')) {
+            } else if (f.includes('courier') || f.includes('mono') || f.includes('dejavu') || f.includes('consolas')) {
                 editorFontFamily.value = 'courier';
             } else {
                 editorFontFamily.value = 'helv';
@@ -1348,8 +1364,8 @@
 
         function updateStyleButtons() {
             if (!activeEditorTarget) return;
-            const isBold = Boolean(activeEditorTarget.flags & 16);
-            const isItalic = Boolean(activeEditorTarget.flags & 2);
+            const isBold = Boolean(activeEditorTarget.flags & 16) || Boolean(activeEditorTarget.is_bold);
+            const isItalic = Boolean(activeEditorTarget.flags & 2) || Boolean(activeEditorTarget.is_italic);
 
             if (isBold) {
                 styleBoldBtn.classList.add('bg-blue-600', 'text-white');
@@ -1474,6 +1490,7 @@
         styleBoldBtn.addEventListener('click', () => {
             if (activeEditorTarget) {
                 activeEditorTarget.flags = (activeEditorTarget.flags ^ 16);
+                activeEditorTarget.is_bold = Boolean(activeEditorTarget.flags & 16);
                 activeEditorTarget.custom_bold = true;
                 updateStyleButtons();
             }
@@ -1482,6 +1499,7 @@
         styleItalicBtn.addEventListener('click', () => {
             if (activeEditorTarget) {
                 activeEditorTarget.flags = (activeEditorTarget.flags ^ 2);
+                activeEditorTarget.is_italic = Boolean(activeEditorTarget.flags & 2);
                 activeEditorTarget.custom_italic = true;
                 updateStyleButtons();
             }
@@ -1568,8 +1586,8 @@
                     color: activeEditorTarget.color,
                     font: activeEditorTarget.font,
                     flags: activeEditorTarget.flags,
-                    is_bold: Boolean(activeEditorTarget.flags & 16),
-                    is_italic: Boolean(activeEditorTarget.flags & 2),
+                    is_bold: Boolean(activeEditorTarget.flags & 16) || Boolean(activeEditorTarget.is_bold),
+                    is_italic: Boolean(activeEditorTarget.flags & 2) || Boolean(activeEditorTarget.is_italic),
                     custom_size: Math.abs(activeEditorTarget.size - (activeEditorTarget.origItem?.size || 12)) > 0.1,
                     custom_font: Boolean(activeEditorTarget.custom_font),
                     custom_bold: Boolean(activeEditorTarget.custom_bold),
@@ -2408,7 +2426,7 @@
             const file = e.target.files[0];
             if (!file) return;
 
-            setStatus(`Uploading and processing ${file.name}...`, 'loading');
+            setStatus(`Analyzing document streams & detecting editable text (${file.name})...`, 'loading');
             const reader = new FileReader();
             reader.onload = async () => {
                 const b64 = reader.result;

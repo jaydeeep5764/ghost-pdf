@@ -66,19 +66,21 @@ def find_matching_embedded_font(doc: pymupdf.Document, page: pymupdf.Page, font_
                     pass
     return None
 
-def resolve_font(font_name: str, flags: int = 0, is_bold: bool = None, is_italic: bool = None) -> dict:
+def resolve_font(font_name: str, flags: int = 0, is_bold: bool = None, is_italic: bool = None, text: str = "") -> dict:
     """
     Authentic typography matching for font family, weight, style, and metrics.
     Accurately interprets MuPDF flags (bit 4 = 16 for bold, bit 1 = 2 for italic, bit 2 = 4 for serif, bit 3 = 8 for mono).
     Allows explicit is_bold / is_italic overrides from caller.
+    If text contains math symbols or non-Latin characters, selects TrueType fonts with full Unicode CMaps.
     """
     clean = clean_font_name(font_name).lower().replace(",", "-").replace("_", "-")
+    has_non_latin = any(ord(c) > 255 for c in text)
 
     # 1. Exact flags check from MuPDF (Bit 4 = 16 is bold, Bit 1 = 2 is italic)
     if is_bold is None:
         is_bold = bool(flags & 16)
         if not is_bold:
-            has_bold_token = any(b in clean for b in ["-bold", "_bold", "bold", "black", "heavy", "-bd"])
+            has_bold_token = any(b in clean for b in ["-bold", "_bold", "bold", "black", "heavy", "-bd", "hebo", "hebi", "times-bold"])
             has_regular_token = any(r in clean for r in ["-regular", "-normal", "-book", "-light", "-rg"])
             if has_bold_token and not has_regular_token:
                 is_bold = True
@@ -117,6 +119,13 @@ def resolve_font(font_name: str, flags: int = 0, is_bold: bool = None, is_italic
 
     # B. Serif family (Times New Roman, TeXGyreTermes, NimbusRoman, Georgia, Cambria, Garamond, Palatino)
     if any(k in clean for k in SERIF_KEYWORDS) or bool(flags & 4):
+        # If text contains math symbols or unicode outside Latin-1, use TrueType font with full unicode CMap
+        if has_non_latin:
+            times_ttf = "timesbd.ttf" if is_bold else ("timesi.ttf" if is_italic else "times.ttf")
+            t_path = os.path.join(WIN_FONTS, times_ttf)
+            if os.path.exists(t_path):
+                return {"file": t_path, "name": "TimesNewRoman-Bold" if is_bold else "TimesNewRoman", "family": "serif", "is_base14": False}
+
         # Base 14 standard Type 1 Times (matches TeXGyreTermes, NimbusRoman, Times New Roman 1:1 without TrueType bloat)
         if is_bold and is_italic:
             return {"name": "times-bolditalic", "family": "serif", "is_base14": True}
@@ -127,6 +136,15 @@ def resolve_font(font_name: str, flags: int = 0, is_bold: bool = None, is_italic
         return {"name": "times-roman", "family": "serif", "is_base14": True}
 
     # C. Sans-serif family (Helvetica, Arial, Calibri, Liberation Sans, Segoe UI)
+    if has_non_latin:
+        arial_file = "arialbd.ttf" if is_bold else ("ariali.ttf" if is_italic else "arial.ttf")
+        arial_path = os.path.join(WIN_FONTS, arial_file)
+        if os.path.exists(arial_path):
+            return {"file": arial_path, "name": "Arial", "family": "sans", "is_base14": False}
+        segoe_file = "segoeuib.ttf" if is_bold else ("segoeuii.ttf" if is_italic else "segoeui.ttf")
+        segoe_path = os.path.join(WIN_FONTS, segoe_file)
+        if os.path.exists(segoe_path):
+            return {"file": segoe_path, "name": "SegoeUI", "family": "sans", "is_base14": False}
     if "arial" in clean:
         arial_file = "arialbd.ttf" if is_bold else ("ariali.ttf" if is_italic else "arial.ttf")
         arial_path = os.path.join(WIN_FONTS, arial_file)
@@ -138,6 +156,27 @@ def resolve_font(font_name: str, flags: int = 0, is_bold: bool = None, is_italic
         calibri_path = os.path.join(WIN_FONTS, calibri_file)
         if os.path.exists(calibri_path):
             return {"file": calibri_path, "name": "Calibri", "family": "sans", "is_base14": False}
+
+    # D. Handwriting & Script family (Segoe Script, Ink Free, Segoe Print, Lucida Handwriting)
+    if any(k in clean for k in ["hand", "script", "ink", "pen", "cursive", "segoesc", "segoepr", "lhandw"]):
+        if any(k in clean for k in ["script", "cursive", "segoesc"]):
+            f_file = "segoescb.ttf" if is_bold else "segoesc.ttf"
+            f_path = os.path.join(WIN_FONTS, f_file)
+            if os.path.exists(f_path):
+                return {"file": f_path, "name": "SegoeScript-Bold" if is_bold else "SegoeScript", "family": "handwriting", "is_base14": False}
+        if any(k in clean for k in ["ink", "pen", "inkfree", "casual"]):
+            f_path = os.path.join(WIN_FONTS, "Inkfree.ttf")
+            if os.path.exists(f_path):
+                return {"file": f_path, "name": "InkFree", "family": "handwriting", "is_base14": False}
+        if any(k in clean for k in ["print", "segoepr", "neat"]):
+            f_file = "segoeprb.ttf" if is_bold else "segoepr.ttf"
+            f_path = os.path.join(WIN_FONTS, f_file)
+            if os.path.exists(f_path):
+                return {"file": f_path, "name": "SegoePrint-Bold" if is_bold else "SegoePrint", "family": "handwriting", "is_base14": False}
+        for cand in ["segoesc.ttf", "Inkfree.ttf", "LHANDW.TTF"]:
+            f_path = os.path.join(WIN_FONTS, cand)
+            if os.path.exists(f_path):
+                return {"file": f_path, "name": "Handwriting", "family": "handwriting", "is_base14": False}
 
     if "segoe" in clean:
         segoe_file = "segoeuib.ttf" if is_bold else ("segoeuii.ttf" if is_italic else "segoeui.ttf")
@@ -255,30 +294,45 @@ def find_original_span_info(page: pymupdf.Page, target_text: str, target_rect: p
 
 def find_max_available_width(page: pymupdf.Page, insert_x: float, target_rect: pymupdf.Rect) -> float:
     """
-    Collision Avoidance: Finds any adjacent text or column to the right on the same vertical line
-    to ensure new text never collides or overlaps with neighboring columns.
+    Collision Avoidance: Finds any adjacent text, word, or column to the right on the same vertical line
+    to ensure new text never collides or overlaps with neighboring content.
+    Checks individual words and spans across both digital and scanned layers.
     """
-    text_dict = page.get_text("dict")
     target_cy = (target_rect.y0 + target_rect.y1) / 2.0
-    line_height = max(10.0, target_rect.height)
-    
+    line_height = max(8.0, target_rect.height)
     nearest_right_x = None
 
-    for block in text_dict.get("blocks", []):
-        for line in block.get("lines", []):
-            for span in line.get("spans", []):
-                s_bbox = span["bbox"]
-                span_cy = (s_bbox[1] + s_bbox[3]) / 2.0
-                # Must be on the exact same vertical line center and located to the right of the target
-                if abs(target_cy - span_cy) < (line_height * 0.45) and s_bbox[0] > (target_rect.x1 - 1.0):
-                    if nearest_right_x is None or s_bbox[0] < nearest_right_x:
-                        nearest_right_x = s_bbox[0]
+    # 1. Check all individual words on the page (word-level granularity)
+    try:
+        raw_words = page.get_text("words")
+        for w in raw_words:
+            w_x0, w_y0, w_x1, w_y1 = w[:4]
+            w_cy = (w_y0 + w_y1) / 2.0
+            if abs(target_cy - w_cy) < (line_height * 0.45) and w_x0 > (target_rect.x1 - 1.0):
+                if nearest_right_x is None or w_x0 < nearest_right_x:
+                    nearest_right_x = w_x0
+    except Exception:
+        pass
 
-    # If adjacent text found, stop 6 points before it to prevent collision
-    if nearest_right_x is not None and nearest_right_x > (insert_x + 20):
-        return max(target_rect.width, nearest_right_x - insert_x - 6.0)
+    # 2. Check blocks and spans from text_dict (for multi-column tables/layouts)
+    try:
+        text_dict = page.get_text("dict")
+        for block in text_dict.get("blocks", []):
+            for line in block.get("lines", []):
+                for span in line.get("spans", []):
+                    s_bbox = span["bbox"]
+                    span_cy = (s_bbox[1] + s_bbox[3]) / 2.0
+                    if abs(target_cy - span_cy) < (line_height * 0.45) and s_bbox[0] > (target_rect.x1 - 1.0):
+                        if nearest_right_x is None or s_bbox[0] < nearest_right_x:
+                            nearest_right_x = s_bbox[0]
+    except Exception:
+        pass
 
-    # Otherwise allow across line up to generous right margin (20pt from page edge)
+    # If adjacent text or word found to the right: stop cleanly before it to prevent collision
+    if nearest_right_x is not None and nearest_right_x > (insert_x + 8.0):
+        return max(target_rect.width, nearest_right_x - insert_x - 3.0)
+
+    # Otherwise allow across line up to generous right margin
     right_margin = page.rect.width - 20.0
     return max(target_rect.width, right_margin - insert_x)
 
@@ -446,7 +500,7 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
 
         # Preserve exact font, flags, and color from the original span
         if span_info:
-            if not edit.get("custom_font") or not font_name or font_name == "helv":
+            if not edit.get("custom_font") or not font_name:
                 font_name = span_info.get("font", font_name)
             # Only adopt flags from span_info if explicit_bold was NOT specified by user
             if flags == 0 and explicit_bold is None:
@@ -463,10 +517,12 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
                 parsed_color = parse_color(color_val)
         else:
             parsed_color = parse_color(color_val or "#000000")
+            if explicit_bold is None and (flags & 16 or any(b in (font_name or "").lower() for b in ["-bold", "bold", "hebo", "black"])):
+                explicit_bold = True
 
         # 3. Font Resolution & Accurate Weight Matching
         emb_font = None  # Use reliable full-encoding fonts to avoid subset glyph omissions
-        font_info = resolve_font(font_name, flags, is_bold=explicit_bold, is_italic=explicit_italic)
+        font_info = resolve_font(font_name, flags, is_bold=explicit_bold, is_italic=explicit_italic, text=new_clean)
         font_kwargs = {}
         if font_info.get("is_base14", False):
             font_kwargs["fontname"] = font_info["name"]
@@ -489,8 +545,8 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
         # Must cover both target_rect and span bbox with 2.5pt vertical pad so zero ghost ascenders/descenders survive
         span_y0 = span_info["bbox"][1] if span_info else target_rect.y0
         span_y1 = span_info["bbox"][3] if span_info else target_rect.y1
-        clean_y0 = min(target_rect.y0, span_y0) - 2.5
-        clean_y1 = max(target_rect.y1, span_y1) + 2.5
+        clean_y0 = min(target_rect.y0, span_y0) - 0.5
+        clean_y1 = max(target_rect.y1, span_y1) + 0.5
 
         if is_paragraph:
             # Multi-line Paragraph / Block Replacement
@@ -600,22 +656,15 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
                 else:
                     actual_drawn_width = natural_width
 
-        # 7. Clean Single-Line Redaction (Full envelope)
-        if has_new_pos:
-            erase_rect = pymupdf.Rect(
-                target_rect.x0 - 1.0,
-                clean_y0,
-                target_rect.x1 + 1.0,
-                clean_y1
-            )
-        else:
-            erase_width = max(target_rect.width, actual_drawn_width)
-            erase_rect = pymupdf.Rect(
-                min(insert_x, target_rect.x0) - 1.0,
-                clean_y0,
-                max(insert_x + erase_width, target_rect.x1) + 1.0,
-                clean_y1
-            )
+        # 7. Clean Single-Line Redaction
+        # Strictly confine erasure to the bounding box of the text being replaced.
+        # NEVER expand horizontally across neighboring words or vertically into adjacent lines!
+        erase_rect = pymupdf.Rect(
+            target_rect.x0 - 0.5,
+            clean_y0,
+            target_rect.x1 + 0.5,
+            clean_y1
+        )
 
         page.draw_rect(erase_rect, color=None, fill=bg_color)
         page.add_redact_annot(erase_rect, fill=bg_color)
@@ -651,7 +700,7 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
         font_name = edit.get("font", "helv")
         is_bold = edit.get("is_bold")
         is_italic = edit.get("is_italic")
-        font_info = resolve_font(font_name, is_bold=is_bold, is_italic=is_italic)
+        font_info = resolve_font(font_name, is_bold=is_bold, is_italic=is_italic, text=new_text)
 
         if font_info.get("is_base14", False):
             active_font = font_info["name"]

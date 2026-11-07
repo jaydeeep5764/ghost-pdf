@@ -8,17 +8,25 @@
 
 ## 🌟 Key Features
 
-- **4-Archetype Typography Matcher:** Intelligently maps font descriptors to authentic system and fallback archetypes:
-  - Programming Sans Monospace (Consolas, Cascadia, DejaVu Sans Mono)
-  - Monospace Typewriter (Courier, Cousine, Inconsolata)
-  - Authentic Serif (Times, Georgia, Garamond, Palatino, Minion)
-  - Crisp Sans-Serif (Helvetica, Arial, Trebuchet, Segoe)
-- **Background Color Sampling:** Automatically inspects bounding box neighborhoods to seamlessly redact and patch backgrounds without leaving halo artifacts.
-- **Direct Stream & Canvas Editing:** Cleanly rewires text operators and coordinates without destructive rasterization or document bloat.
+- **Digital Vector & Scanned Photo PDF Editing:**
+  - **Native Digital PDFs:** Edits content streams in-place with zero quality loss and no artificial rasterization.
+  - **Scanned Documents & Exam Papers:** Neural AI OCR detects words, lines, and bounding boxes on scanned/photo PDFs for full point-and-click editing.
+  - **Asynchronous Pre-OCR & Zero-Copy Buffers:** Fast page loading with background pre-processing across multi-page documents.
+- **Advanced Typography & Weight Matching:**
+  - Sans-Serif (Arial, Helvetica, Trebuchet, Segoe UI)
+  - Authentic Serif (Times New Roman, Georgia, Garamond, Palatino, Minion)
+  - Clean Sans (Calibri)
+  - Monospace (Consolas, DejaVu Sans Mono, Courier)
+  - Accurate stroke thickness analysis for bold weights and calibrated font sizing.
+- **✍️ Handwriting & Script Engine:**
+  - **Cursive Script:** Flowing connected loops (*Segoe Script*, *Lucida Handwriting*)
+  - **Casual Ballpoint:** Natural handwritten strokes (*Ink Free*)
+  - **Neat Hand Print:** Separated hand-drawn letters (*Segoe Print*)
+  - **Ruled-Paper Inpainting:** OpenCV Navier-Stokes inpainting erases handwritten ink without cutting notebook horizontal ruling lines or grid margins.
+  - **Dynamic Ink Tone Sampling:** Samples real pen ink colors (ballpoint blue, fountain black, red marking, pencil graphite).
+- **Background Color & Line-Aware Inpainting:** Automatically inspects bounding box neighborhoods to seamlessly redact and patch backgrounds without leaving white halo artifacts.
 - **Zero Watermarks & 100% Privacy:** Runs entirely on your local machine with zero external API calls or third-party tracking.
-- **Dual Interface:**
-  - **Interactive Web Canvas:** Visual point-and-click browser editor (`web/server.py`).
-  - **Streamlit Studio:** Fast parameter tuning and side-by-side inspection (`app.py`).
+- **Interactive Web Canvas:** Visual point-and-click browser editor (`web/server.py` on `http://localhost:3000`).
 
 ---
 
@@ -41,17 +49,9 @@ python web/server.py
 ```
 Then open [http://localhost:3000](http://localhost:3000) in your browser.
 
-### 3. Launch the Streamlit Studio
-
-For testing and visual comparison of stream redaction & font alias matching:
-
-```bash
-streamlit run app.py
-```
-
 ---
 
-### 4. Universal Watermark & Steganography Remover (CLI)
+### 3. Universal Watermark & Steganography Remover (CLI)
 
 Sanitize any PDF or scanned image (removes text watermarks, publisher banners, laser printer tracking dots, and invisible steganography):
 
@@ -72,16 +72,15 @@ python watermark_engine.py paper.pdf -o paper_clean.pdf --keywords "MyWatermark"
 
 ```
 ghost-pdf/
-├── app.py                  # Streamlit application (Dual Mode: Editor + Universal Sanitizer)
+├── universal_engine.py      # Core typography, handwriting font resolution & stream replacement
 ├── watermark_engine.py      # Universal Watermark, MIC Tracking Dot & Steganography Sanitizer
-├── universal_engine.py      # Core typography & in-place stream replacement engine
 ├── smart_typography.py     # Font metric resolver & background color sampling
 ├── font_resolver.py        # System font locator and fallback matching
 ├── lowlevel_editor.py      # Low-level PDF stream operator rewiring
-├── test_watermark_engine.py# Comprehensive unit test suite for the sanitizer
+├── app.py                  # Streamlit application (Dual Mode: Editor + Universal Sanitizer)
 ├── web/
-│   ├── index.html          # Interactive HTML5/Canvas UI
-│   └── server.py           # Local HTTP server backend
+│   ├── index.html          # Interactive HTML5/Canvas UI with handwriting styles & live controls
+│   └── server.py           # High-performance HTTP server backend with neural OCR caching
 ├── sample_invoice.pdf      # Sample document for verification & testing
 ├── requirements.txt        # Python package dependencies
 └── README.md
