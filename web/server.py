@@ -383,6 +383,18 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
 
                 # Check format
                 ext = os.path.splitext(filename)[1].lower() if filename else ".pdf"
+                image_extensions = ('.png', '.jpg', '.jpeg', '.webp', '.tiff', '.bmp')
+                is_image = ext in image_extensions or uploaded_bytes.startswith((b'\x89PNG', b'\xff\xd8\xff', b'RIFF', b'II*\x00', b'MM\x00*'))
+
+                if not uploaded_bytes.startswith(b"%PDF") and is_image:
+                    try:
+                        ft = ext.lstrip(".") if ext in image_extensions else "png"
+                        img_doc = pymupdf.open(stream=uploaded_bytes, filetype=ft)
+                        uploaded_bytes = img_doc.convert_to_pdf()
+                        ext = ".pdf"
+                    except Exception as img_err:
+                        print(f"Image to PDF conversion notice: {img_err}")
+
                 is_pdf = uploaded_bytes.startswith(b"%PDF") or ext == ".pdf"
 
                 if is_pdf:

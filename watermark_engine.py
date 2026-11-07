@@ -340,16 +340,14 @@ class AutoWatermarkDetector:
     def detect_corner_watermarks(image: Image.Image, margin_pct: float = 0.35) -> np.ndarray:
         """
         Scans all 4 image corners for localized logos, timestamps, and copyright stamps.
+        Differentiates between thin text/logo character strokes (e.g. download.jfif)
+        and solid opaque badge overlays (e.g. YouTube banner, date plaque).
         Returns a binary mask (uint8: 0 or 255) of detected corner watermarks.
         """
         img_gray = image.convert("L")
         w, h = image.size
+        arr_gray = np.array(img_gray, dtype=np.float32)
         mask = np.zeros((h, w), dtype=np.uint8)
-
-        # Compute morphological gradient: MaxFilter - MinFilter
-        dilated = np.array(img_gray.filter(ImageFilter.MaxFilter(5)), dtype=np.float32)
-        eroded = np.array(img_gray.filter(ImageFilter.MinFilter(5)), dtype=np.float32)
-        morph_grad = dilated - eroded
 
         mw = int(w * margin_pct)
         mh = int(h * margin_pct)
@@ -361,27 +359,68 @@ class AutoWatermarkDetector:
             (w - mw, h - mh, w, h),         # Bottom-right (most common)
         ]
 
+        # Saturation map to isolate neutral/achromatic watermark stamps from colorful photo textures
+        if image.mode in ('RGB', 'RGBA'):
+            im_rgb = np.array(image.convert('RGB'), dtype=np.float32)
+            max_c = np.max(im_rgb, axis=2)
+            min_c = np.min(im_rgb, axis=2)
+            sat = np.where(max_c > 0, (max_c - min_c) / (max_c + 1e-5), 0.0)
+        else:
+            sat = np.zeros((h, w), dtype=np.float32)
+
+        # Morphological Top-Hat for thin character strokes (logos, copyright, text)
+        opened = img_gray.filter(ImageFilter.MinFilter(3)).filter(ImageFilter.MaxFilter(3))
+        wth = arr_gray - np.array(opened, dtype=np.float32)
+
+        closed = img_gray.filter(ImageFilter.MaxFilter(3)).filter(ImageFilter.MinFilter(3))
+        bth = np.array(closed, dtype=np.float32) - arr_gray
+
+        # Morphological gradient for solid badge / banner detection
+        dilated = np.array(img_gray.filter(ImageFilter.MaxFilter(5)), dtype=np.float32)
+        eroded = np.array(img_gray.filter(ImageFilter.MinFilter(5)), dtype=np.float32)
+        morph_grad = dilated - eroded
         global_mean_grad = float(np.mean(morph_grad))
 
+        min_strokes = max(60, int(w * h * 0.0015))
+
         for x0, y0, x1, y1 in corners:
-            corner_grad = morph_grad[y0:y1, x0:x1]
+            c_wth = wth[y0:y1, x0:x1]
+            c_bth = bth[y0:y1, x0:x1]
+            c_gray = arr_gray[y0:y1, x0:x1]
+            c_sat = sat[y0:y1, x0:x1]
+
+            # 1. Stroke watermark detection (bright or dark neutral text/logo strokes)
+            bright_strokes = (c_wth > 28.0) & (c_gray > 160.0) & (c_sat < 0.28)
+            dark_strokes = (c_bth > 28.0) & (c_gray < 90.0) & (c_sat < 0.28)
+            c_strokes = bright_strokes | dark_strokes
+
+            stroke_count = int(np.sum(c_strokes))
+            if stroke_count >= min_strokes and stroke_count < (mw * mh * 0.40):
+                cand_img = Image.fromarray((c_strokes * 255).astype(np.uint8))
+                dilated_strokes = np.array(cand_img.filter(ImageFilter.MaxFilter(5)))
+                mask[y0:y1, x0:x1] = np.maximum(mask[y0:y1, x0:x1], dilated_strokes)
+                continue
+
+            # 2. Solid badge watermark detection (e.g. solid opaque rectangle/banner)
+            c_grad = morph_grad[y0:y1, x0:x1]
             threshold = max(24.0, global_mean_grad * 1.5)
-            c_mask = corner_grad > threshold
+            c_mask = c_grad > threshold
             if np.sum(c_mask) >= 15:
-                # Find bounding box of the watermark cluster in this corner to cover solid badges and text interiors
                 ys, xs = np.where(c_mask)
                 cy0, cy1 = int(np.min(ys)), int(np.max(ys))
                 cx0, cx1 = int(np.min(xs)), int(np.max(xs))
-
                 cluster_w = cx1 - cx0
                 cluster_h = cy1 - cy0
-                if cluster_w > 4 and cluster_h > 4 and (cluster_w * cluster_h) < (w * h * 0.25):
-                    pad = 3
-                    by0 = max(0, y0 + cy0 - pad)
-                    by1 = min(h, y0 + cy1 + pad + 1)
-                    bx0 = max(0, x0 + cx0 - pad)
-                    bx1 = min(w, x0 + cx1 + pad + 1)
-                    mask[by0:by1, bx0:bx1] = 255
+                if cluster_w > 8 and cluster_h > 8 and (cluster_w * cluster_h) < (w * h * 0.25):
+                    pad_in = min(3, cluster_w // 4, cluster_h // 4)
+                    badge_interior = c_gray[cy0 + pad_in : cy1 - pad_in + 1, cx0 + pad_in : cx1 - pad_in + 1]
+                    if badge_interior.size > 0 and np.std(badge_interior) < 22.0:
+                        pad = 3
+                        by0 = max(0, y0 + cy0 - pad)
+                        by1 = min(h, y0 + cy1 + pad + 1)
+                        bx0 = max(0, x0 + cx0 - pad)
+                        bx1 = min(w, x0 + cx1 + pad + 1)
+                        mask[by0:by1, bx0:bx1] = 255
 
         return mask
 
@@ -390,6 +429,7 @@ class AutoWatermarkDetector:
         """
         Detects repeating diagonal grid lines typical of stock photography (Getty, Shutterstock, Adobe Stock).
         Identifies directional contrast anomalies aligned along +/-45 deg diagonal axes.
+        Validates line projection continuity to eliminate false positives on natural photos.
         """
         img_gray = image.convert("L")
         arr = np.array(img_gray, dtype=np.float32)
@@ -410,10 +450,25 @@ class AutoWatermarkDetector:
         d_para2 = np.abs(arr[2:, :-2] - arr[:-2, 2:])
         grid2 = (d_perp2 > (d_para2 * 2.2 + 10.0)) & (d_perp2 > 16.0)
 
-        combined_grid = grid1 | grid2
-        # Require substantial line coverage before activating grid removal
-        if np.sum(combined_grid) >= (w * h * 0.003):
-            cand_img = Image.fromarray(combined_grid.astype(np.uint8) * 255)
+        # Diagonal line projection test to prevent false positives on natural photos
+        min_line_len = int(min(w, h) * 0.35)
+
+        # 45 deg lines
+        diag1_max = max((np.sum(np.diagonal(grid1, offset=k)) for k in range(-h + 10, w - 10)), default=0)
+        # -45 deg lines
+        grid2_flipped = np.fliplr(grid2)
+        diag2_max = max((np.sum(np.diagonal(grid2_flipped, offset=k)) for k in range(-h + 10, w - 10)), default=0)
+
+        has_grid1 = diag1_max >= min_line_len
+        has_grid2 = diag2_max >= min_line_len
+
+        if has_grid1 or has_grid2:
+            cand = np.zeros_like(grid1, dtype=bool)
+            if has_grid1:
+                cand |= grid1
+            if has_grid2:
+                cand |= grid2
+            cand_img = Image.fromarray((cand * 255).astype(np.uint8))
             dilated_grid = np.array(cand_img.filter(ImageFilter.MaxFilter(5)))
             mask[1:-1, 1:-1] = dilated_grid
 
@@ -1449,23 +1504,41 @@ class UniversalSanitizer:
                 "auto_detected_watermark": False
             }
 
-            if remove_dots:
-                img, dots = PaperSanitizer.remove_printer_tracking_dots(img)
-                audit["tracking_dots_removed"] = dots
+            # Classify image: Document scan (paper background) vs Natural photo / graphic
+            im_rgb = np.array(img.convert("RGB"), dtype=np.float32)
+            r, g, b = im_rgb[:, :, 0], im_rgb[:, :, 1], im_rgb[:, :, 2]
+            lum = 0.299 * r + 0.587 * g + 0.114 * b
+            max_c = np.maximum(np.maximum(r, g), b)
+            min_c = np.minimum(np.minimum(r, g), b)
+            sat = np.where(max_c > 0, (max_c - min_c) / (max_c + 1e-5), 0.0)
+            paper_pixels = (lum > 220) & (sat < 0.15)
+            is_paper_document = float(np.mean(paper_pixels)) >= 0.55
 
-            # 1. Neutralize color stamps (red/blue/purple) preserving dark text/lines
-            img, chroma_count = ChrominanceDeltaSanitizer.neutralize_color_stamps(img)
-            if chroma_count > 0:
-                audit["color_stamps_neutralized"] = chroma_count
+            if is_paper_document:
+                # Scanned paper document workflow:
+                if remove_dots:
+                    img, dots = PaperSanitizer.remove_printer_tracking_dots(img)
+                    audit["tracking_dots_removed"] = dots
 
-            if flatten_scanned:
-                img, bleached = PaperSanitizer.bleach_scanned_watermarks(img)
-                audit["scanned_watermarks_bleached"] = bleached
+                # Neutralize color stamps (red/blue/purple) preserving dark text/lines
+                img, chroma_count = ChrominanceDeltaSanitizer.neutralize_color_stamps(img)
+                if chroma_count > 0:
+                    audit["color_stamps_neutralized"] = chroma_count
 
-            if remove_stego:
-                img = SteganographySanitizer.neutralize_frequency_watermarks(img)
-                img = SteganographySanitizer.clear_lsb_payload(img, bits=1)
-                audit["stego_neutralized"] = True
+                if flatten_scanned:
+                    img, bleached = PaperSanitizer.bleach_scanned_watermarks(img)
+                    audit["scanned_watermarks_bleached"] = bleached
+
+                if remove_stego:
+                    img = SteganographySanitizer.neutralize_frequency_watermarks(img)
+                    img = SteganographySanitizer.clear_lsb_payload(img, bits=1)
+                    audit["stego_neutralized"] = True
+            else:
+                # Natural photo / artwork / graphic workflow:
+                # Never bleach paper or neutralize warm photo colors (leaves, skin, wood).
+                if remove_stego:
+                    img = SteganographySanitizer.clear_lsb_payload(img, bits=1)
+                    audit["stego_neutralized"] = True
 
             # 2. Inpainting: manual rect or zero-click auto-detection
             if inpaint_rect:

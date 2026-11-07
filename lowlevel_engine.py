@@ -126,7 +126,7 @@ def find_candidate_operators(stream: str, clean_target: str) -> list:
     for m in tj_matches:
         tj_raw = m.group(1)
         extracted = parse_tj_array_text(tj_raw).strip()
-        if clean_target == extracted or clean_target in extracted or extracted in clean_target:
+        if extracted and (clean_target == extracted or clean_target in extracted):
             candidates.append({
                 "start": m.start(),
                 "end": m.end(),
@@ -139,7 +139,7 @@ def find_candidate_operators(stream: str, clean_target: str) -> list:
     lit_matches = list(re.finditer(r'\(((?:\\.|[^\\()])*)\)\s*(Tj|\')', stream))
     for m in lit_matches:
         raw_text = unescape_pdf_literal(m.group(1)).strip()
-        if clean_target == raw_text or clean_target in raw_text or raw_text in clean_target:
+        if raw_text and (clean_target == raw_text or clean_target in raw_text):
             candidates.append({
                 "start": m.start(),
                 "end": m.end(),
@@ -154,7 +154,7 @@ def find_candidate_operators(stream: str, clean_target: str) -> list:
         hex_clean = m.group(1).replace(' ', '').replace('\t', '').replace('\n', '')
         try:
             decoded = binascii.unhexlify(hex_clean).decode('latin1', errors='ignore').strip()
-            if clean_target == decoded or clean_target in decoded or decoded in clean_target:
+            if decoded and (clean_target == decoded or clean_target in decoded):
                 candidates.append({
                     "start": m.start(),
                     "end": m.end(),
@@ -219,18 +219,44 @@ def match_text_in_stream(stream: str, target_text: str, page_height: float = 842
     c = best_cand or candidates[0]
     return c["start"], c["end"], c["op_type"], c["extracted"]
 
-def find_font_tag_for_weight(page: pymupdf.Page, bold: bool = True) -> str:
-    """Locates an already registered font tag in the page's /Resources /Font matching the weight."""
+def find_font_tag_for_weight(page: pymupdf.Page, orig_font_name: str = "", bold: bool = True) -> str:
+    """Locates an already registered font tag in the page's /Resources /Font matching the desired weight and family."""
     if not page:
         return "times-bold" if bold else "times-roman"
-    for f in page.get_fonts():
-        fname = f[3].lower()
+
+    clean_orig = re.sub(r'^[A-Z0-9]{6}\+', '', orig_font_name).lower()
+    orig_family = re.sub(r'[\-_ ]*(regular|bold|italic|oblique|[0-9]+)', '', clean_orig).strip()
+
+    fonts = page.get_fonts()
+    # 1. First preference: exact family match with requested weight
+    if orig_family:
+        for f in fonts:
+            fname = re.sub(r'^[A-Z0-9]{6}\+', '', f[3]).lower()
+            tag = f[4]
+            is_f_bold = bool(re.search(r'[\-_ ]*(bold|heavy|black)', fname)) or fname.endswith('bd')
+            if (orig_family in fname or fname in orig_family) and (bold == is_f_bold) and tag:
+                return tag
+
+    # 2. Second preference: general serif/sans/mono family match with requested weight
+    is_orig_serif = any(s in clean_orig for s in ["times", "roman", "serif", "cmr", "termes"])
+    is_orig_mono = any(m in clean_orig for m in ["courier", "mono", "consolas"])
+    for f in fonts:
+        fname = re.sub(r'^[A-Z0-9]{6}\+', '', f[3]).lower()
         tag = f[4]
-        is_f_bold = ('bold' in fname or 'black' in fname or fname.endswith('bd') or fname.endswith('b'))
-        if bold and is_f_bold and tag:
-            return tag
-        elif not bold and not is_f_bold and tag:
-            return tag
+        is_f_bold = bool(re.search(r'[\-_ ]*(bold|heavy|black)', fname)) or fname.endswith('bd')
+        if bold == is_f_bold and tag:
+            if is_orig_serif and any(s in fname for s in ["times", "roman", "serif", "cmr", "termes"]):
+                return tag
+            elif is_orig_mono and any(m in fname for m in ["courier", "mono"]):
+                return tag
+            elif not is_orig_serif and not is_orig_mono and not any(s in fname for s in ["times", "roman", "serif", "courier", "mono"]):
+                return tag
+
+    # 3. Third preference: Base 14 standard font matching the family
+    if is_orig_serif:
+        return "times-bold" if bold else "times-roman"
+    elif is_orig_mono:
+        return "courier-bold" if bold else "courier"
     return "hebo" if bold else "helv"
 
 def delete_image_from_stream(doc: pymupdf.Document, page: pymupdf.Page, bbox: list = None) -> bool:
@@ -362,7 +388,7 @@ def apply_lowlevel_edit(doc: pymupdf.Document, page: pymupdf.Page, edit: dict) -
         color = edit.get("color", "#000000")
         is_bold = edit.get("is_bold")
         if is_bold is None and "flags" in edit:
-            is_bold = bool(int(edit["flags"]) & 2)
+            is_bold = bool(int(edit["flags"]) & 16)
 
         if is_bold:
             font = find_font_tag_for_weight(page, bold=True)
@@ -403,6 +429,8 @@ def apply_lowlevel_edit(doc: pymupdf.Document, page: pymupdf.Page, edit: dict) -
             else:
                 # Substring erasure within line
                 new_full = replace_in_text(extracted, old_text, "")
+                if new_full == extracted and old_text.strip():
+                    return False
                 stream = stream[:start] + f"[({escape_pdf_literal(new_full)})] TJ" + stream[end:]
             doc.update_stream(xref, stream.encode('latin1'))
             return True
@@ -428,6 +456,9 @@ def apply_lowlevel_edit(doc: pymupdf.Document, page: pymupdf.Page, edit: dict) -
         # If user edited a single word within a longer line, preserve sibling words!
         if not is_multi_line:
             new_run_text = replace_in_text(matched_str, old_text, new_text)
+            if new_run_text == matched_str and old_text.strip() != new_text.strip():
+                # Operator did not contain target or replacement failed; fail closed to universal_engine fallback
+                return False
         else:
             new_run_text = new_text
 
@@ -449,20 +480,36 @@ def apply_lowlevel_edit(doc: pymupdf.Document, page: pymupdf.Page, edit: dict) -
                 orig_fname = last_tf.group(1)
                 orig_size = float(last_tf.group(2))
 
+            orig_fname_clean = orig_fname.lstrip("/")
+            orig_font_info = None
+            for f in page.get_fonts():
+                if f[4] == orig_fname_clean:
+                    orig_font_info = f
+                    break
+
+            orig_font_title = orig_font_info[3] if orig_font_info else edit.get("font", "helv")
+            orig_is_bold = bool(re.search(r'[\-_ ]*(bold|heavy|black)', orig_font_title.lower())) or orig_font_title.lower().endswith('bd')
+
             is_bold = edit.get("is_bold")
             if is_bold is None and "flags" in edit:
-                is_bold = bool(int(edit["flags"]) & 2)
+                is_bold = bool(int(edit["flags"]) & 16)
 
-            custom_size = edit.get("custom_size", False)
+            custom_bold = edit.get("custom_bold", False) or (is_bold is not None and is_bold != orig_is_bold)
+            custom_font = edit.get("custom_font", False)
+            custom_size = edit.get("custom_size", False) or (edit.get("size") is not None and abs(float(edit["size"]) - orig_size) > 0.5)
+
             req_size = float(edit.get("size", orig_size)) if custom_size else orig_size
             final_fname = orig_fname
 
-            if is_bold is not None:
-                tag = find_font_tag_for_weight(page, bold=is_bold)
+            # ONLY change font if caller explicitly requested a weight or family change!
+            if custom_bold and is_bold is not None and is_bold != orig_is_bold:
+                tag = find_font_tag_for_weight(page, orig_font_name=orig_font_title, bold=is_bold)
                 if tag:
                     final_fname = "/" + tag
-            elif edit.get("font") and edit.get("font").lower() in ["helv", "times", "courier", "times-bold", "hebo"]:
-                final_fname = "/" + edit.get("font")
+            elif custom_font and edit.get("font"):
+                f_req = edit.get("font").lower()
+                if f_req in ["helv", "times", "courier", "times-bold", "hebo"]:
+                    final_fname = "/" + edit.get("font")
 
             line_spacing = max(11.5, req_size * 1.25)
 
@@ -474,8 +521,8 @@ def apply_lowlevel_edit(doc: pymupdf.Document, page: pymupdf.Page, edit: dict) -
             else:
                 new_op = f" [({escape_pdf_literal(new_run_text)})] TJ "
 
-            # Apply font change (Tf)
-            if last_tf:
+            # Apply font change (Tf) ONLY if font tag or size actually changed!
+            if last_tf and (final_fname != orig_fname or custom_size):
                 new_tf_str = f"{final_fname} {req_size:.1f} Tf"
                 tf_start, tf_end = last_tf.span()
                 block_prefix = block_content[:tf_start] + new_tf_str + block_content[tf_end:rel_start]

@@ -1341,8 +1341,8 @@
 
         function updateStyleButtons() {
             if (!activeEditorTarget) return;
-            const isBold = Boolean(activeEditorTarget.flags & 2);
-            const isItalic = Boolean(activeEditorTarget.flags & 1);
+            const isBold = Boolean(activeEditorTarget.flags & 16);
+            const isItalic = Boolean(activeEditorTarget.flags & 2);
 
             if (isBold) {
                 styleBoldBtn.classList.add('bg-blue-600', 'text-white');
@@ -1461,19 +1461,21 @@
         });
 
         editorFontFamily.addEventListener('change', (e) => {
-            if (activeEditorTarget) activeEditorTarget.font = e.target.value;
+            if (activeEditorTarget) { activeEditorTarget.font = e.target.value; activeEditorTarget.custom_font = true; }
         });
 
         styleBoldBtn.addEventListener('click', () => {
             if (activeEditorTarget) {
-                activeEditorTarget.flags = (activeEditorTarget.flags ^ 2);
+                activeEditorTarget.flags = (activeEditorTarget.flags ^ 16);
+                activeEditorTarget.custom_bold = true;
                 updateStyleButtons();
             }
         });
 
         styleItalicBtn.addEventListener('click', () => {
             if (activeEditorTarget) {
-                activeEditorTarget.flags = (activeEditorTarget.flags ^ 1);
+                activeEditorTarget.flags = (activeEditorTarget.flags ^ 2);
+                activeEditorTarget.custom_italic = true;
                 updateStyleButtons();
             }
         });
@@ -1559,9 +1561,11 @@
                     color: activeEditorTarget.color,
                     font: activeEditorTarget.font,
                     flags: activeEditorTarget.flags,
-                    is_bold: Boolean(activeEditorTarget.flags & 2),
-                    is_italic: Boolean(activeEditorTarget.flags & 1),
+                    is_bold: Boolean(activeEditorTarget.flags & 16),
+                    is_italic: Boolean(activeEditorTarget.flags & 2),
                     custom_size: Math.abs(activeEditorTarget.size - (activeEditorTarget.origItem?.size || 12)) > 0.1,
+                    custom_font: Boolean(activeEditorTarget.custom_font),
+                    custom_bold: Boolean(activeEditorTarget.custom_bold),
                     reflow: editorReflowToggle.checked
                 };
                 if (isPositionChanged) {
@@ -2210,35 +2214,8 @@
         // -------------------------------------------------------------
         // Custom File Upload & Export
         // -------------------------------------------------------------
-        pdfFileInput.addEventListener('change', async (e) => {
-            const file = e.target.files[0];
-            if (!file) return;
+        // Duplicate upload listener removed (handled cleanly below)
 
-            setStatus('Uploading & indexing PDF...', 'loading');
-
-            const reader = new FileReader();
-            reader.onload = async () => {
-                const base64Data = reader.result;
-                try {
-                    const res = await fetch('/api/upload', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ pdf_base64: base64Data })
-                    });
-                    const resData = await res.json();
-                    if (resData.status === 'success') {
-                        renderPageData(resData.data);
-                        setStatus('Custom PDF Loaded & Indexed!', 'success');
-                    } else {
-                        alert('Failed to load PDF: ' + resData.message);
-                        setStatus('Failed to load PDF', 'error');
-                    }
-                } catch (err) {
-                    alert('Upload failed: ' + err.message);
-                }
-            };
-            reader.readAsDataURL(file);
-        });
 
         downloadPdfBtn.addEventListener('click', async () => {
             const origHtml = downloadPdfBtn.innerHTML;

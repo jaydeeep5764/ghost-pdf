@@ -117,6 +117,11 @@ def resolve_font(font_name: str, flags: int = 0, is_bold: bool = None, is_italic
 
     # B. Serif family (Times New Roman, TeXGyreTermes, NimbusRoman, Georgia, Cambria, Garamond, Palatino)
     if any(k in clean for k in SERIF_KEYWORDS) or bool(flags & 4):
+        times_file = "timesbd.ttf" if is_bold else ("timesi.ttf" if is_italic else "times.ttf")
+        times_path = os.path.join(WIN_FONTS, times_file)
+        if os.path.exists(times_path):
+            return {"file": times_path, "name": "TimesNewRoman", "family": "serif", "is_base14": False}
+
         # Base 14 standard Type 1 Times (matches TeXGyreTermes, NimbusRoman, Times New Roman 1:1 without TrueType bloat)
         if is_bold and is_italic:
             return {"name": "times-bolditalic", "family": "serif", "is_base14": True}
@@ -127,11 +132,29 @@ def resolve_font(font_name: str, flags: int = 0, is_bold: bool = None, is_italic
         return {"name": "times-roman", "family": "serif", "is_base14": True}
 
     # C. Sans-serif family (Helvetica, Arial, Calibri, Liberation Sans, Segoe UI)
+    if "arial" in clean:
+        arial_file = "arialbd.ttf" if is_bold else ("ariali.ttf" if is_italic else "arial.ttf")
+        arial_path = os.path.join(WIN_FONTS, arial_file)
+        if os.path.exists(arial_path):
+            return {"file": arial_path, "name": "Arial", "family": "sans", "is_base14": False}
+
     if "calibri" in clean:
         calibri_file = "calibrib.ttf" if is_bold else ("calibrii.ttf" if is_italic else "calibri.ttf")
         calibri_path = os.path.join(WIN_FONTS, calibri_file)
         if os.path.exists(calibri_path):
             return {"file": calibri_path, "name": "Calibri", "family": "sans", "is_base14": False}
+
+    if "segoe" in clean:
+        segoe_file = "segoeuib.ttf" if is_bold else ("segoeuii.ttf" if is_italic else "segoeui.ttf")
+        segoe_path = os.path.join(WIN_FONTS, segoe_file)
+        if os.path.exists(segoe_path):
+            return {"file": segoe_path, "name": "SegoeUI", "family": "sans", "is_base14": False}
+
+    if "georgia" in clean:
+        georgia_file = "georgiab.ttf" if is_bold else ("georgiai.ttf" if is_italic else "georgia.ttf")
+        georgia_path = os.path.join(WIN_FONTS, georgia_file)
+        if os.path.exists(georgia_path):
+            return {"file": georgia_path, "name": "Georgia", "family": "serif", "is_base14": False}
 
     # Standard Base 14 Helvetica (Type 1 standard, clean slim stems, zero artificial bolding)
     if is_bold and is_italic:
@@ -194,6 +217,26 @@ def parse_color(color_val) -> tuple:
                 int(c_str[4:6], 16) / 255.0,
             )
     return (0.0, 0.0, 0.0)
+
+
+def ensure_contrast(text_color: tuple, bg_color: tuple, min_contrast: float = 0.35) -> tuple:
+    """
+    Prevents unreadable white-on-white or dark-on-dark text rendering by ensuring
+    sufficient luminance contrast between text ink and background.
+    """
+    if not isinstance(text_color, (list, tuple)) or len(text_color) < 3:
+        text_color = (0.0, 0.0, 0.0)
+    if not isinstance(bg_color, (list, tuple)) or len(bg_color) < 3:
+        bg_color = (1.0, 1.0, 1.0)
+
+    lum_text = 0.299 * text_color[0] + 0.587 * text_color[1] + 0.114 * text_color[2]
+    lum_bg = 0.299 * bg_color[0] + 0.587 * bg_color[1] + 0.114 * bg_color[2]
+
+    if abs(lum_text - lum_bg) < min_contrast:
+        # Insufficient contrast: snap to high-contrast tone (black on light bg, white on dark bg)
+        return (0.0, 0.0, 0.0) if lum_bg > 0.5 else (1.0, 1.0, 1.0)
+
+    return tuple(float(c) for c in text_color[:3])
 
 
 def find_original_span_info(page: pymupdf.Page, target_text: str, target_rect: pymupdf.Rect):
@@ -340,10 +383,10 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
 
         explicit_bold = edit.get("is_bold")
         if explicit_bold is None and "flags" in edit:
-            explicit_bold = bool(int(edit["flags"]) & 2)
+            explicit_bold = bool(int(edit["flags"]) & 16)
         explicit_italic = edit.get("is_italic")
         if explicit_italic is None and "flags" in edit:
-            explicit_italic = bool(int(edit["flags"]) & 1)
+            explicit_italic = bool(int(edit["flags"]) & 2)
         custom_size = edit.get("custom_size", False)
         color_val = edit.get("color")
 
@@ -408,7 +451,7 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
 
         # Preserve exact font, flags, and color from the original span
         if span_info:
-            if not font_name or font_name == "helv":
+            if not edit.get("custom_font") or not font_name or font_name == "helv":
                 font_name = span_info.get("font", font_name)
             # Only adopt flags from span_info if explicit_bold was NOT specified by user
             if flags == 0 and explicit_bold is None:
