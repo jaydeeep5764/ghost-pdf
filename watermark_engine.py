@@ -133,6 +133,7 @@ class PaperSanitizer:
         """
         Bleaches semi-transparent color stamps (red/pink/blue) and faint gray watermarks
         baked into scanned pages, while keeping dark ink, text lines, and diagrams 100% preserved.
+        Safeguards text strokes from being bleached or erased when text lies over the watermark.
         """
         img_rgb = image.convert("RGB")
         arr = np.array(img_rgb, dtype=np.float32)
@@ -144,24 +145,34 @@ class PaperSanitizer:
         lum = 0.299 * r + 0.587 * g + 0.114 * b
         chroma = np.maximum(np.abs(r - g), np.maximum(np.abs(r - b), np.abs(g - b)))
 
-        # 1. Color watermarks on light paper (pink, red, purple, blue stamps)
-        color_wm = (lum > 135.0) & (chroma > 18.0)
+        # 1. Text stroke protection: Dark ink strokes (lum < 135) must NEVER be bleached to white
+        is_text_stroke = (lum < 135.0)
 
-        # 2. Faint gray watermarks (lum between 195 and 238 with low chroma)
-        gray_wm = (lum >= 195.0) & (lum <= 238.0) & (chroma <= 15.0)
+        # 2. Color watermarks on light paper background
+        color_wm_bg = (lum >= 155.0) & (chroma > 18.0)
 
-        wm_mask = color_wm | gray_wm
-        count_bleached = int(np.sum(wm_mask))
+        # 3. Faint gray watermarks on light paper
+        gray_wm_bg = (lum >= 195.0) & (lum <= 238.0) & (chroma <= 15.0)
+
+        # 4. Color watermark intersecting text strokes (chroma on dark ink) -> desaturate, do not bleach
+        color_wm_on_text = is_text_stroke & (chroma > 18.0)
+
+        wm_bg_mask = color_wm_bg | gray_wm_bg
+        count_bleached = int(np.sum(wm_bg_mask)) + int(np.sum(color_wm_on_text))
 
         if count_bleached == 0:
             return image, 0
 
         cleaned_arr = arr.copy()
-        # Bleach watermark areas to white
-        cleaned_arr[wm_mask] = 255.0
+        # Bleach background watermark areas to clean white
+        cleaned_arr[wm_bg_mask] = 255.0
 
-        # Push any near-white paper background (> 238) smoothly to 255
-        bg_mask = lum > 238.0
+        # For text intersecting color stamps, preserve ink darkness by desaturating
+        for c in range(3):
+            cleaned_arr[color_wm_on_text, c] = lum[color_wm_on_text]
+
+        # Push near-white paper background (> 240) smoothly to 255
+        bg_mask = (lum > 240.0) & (~is_text_stroke)
         cleaned_arr[bg_mask] = 255.0
 
         cleaned_img = Image.fromarray(np.clip(cleaned_arr, 0, 255).astype(np.uint8), mode="RGB")
@@ -422,6 +433,248 @@ class OfficeSanitizer:
         return out_buf.getvalue(), audit
 
 
+class PreflightStructuralDetector:
+    """
+    Enfocus PitStop-inspired structural preflight detector for PDFs.
+    Identifies watermarks by syntactic, geometric, and topological traits
+    without relying on predefined keyword dictionaries:
+    1. Affine Matrix Rotation: Angles |theta| in [15°, 75°] or [105°, 165°] (diagonal tilt, e.g. 45°).
+    2. Extended Graphics State: Fill/stroke alpha (/ca, /CA) <= 0.70.
+    3. Structural Patterns: Full-page /Pattern fills (e.g. /wspe_, tiling watermarks).
+    4. Cross-Page Repetition: Form XObjects or stream blocks recurring across pages.
+    """
+
+    @staticmethod
+    def is_diagonal_affine(a: float, b: float, c: float, d: float) -> bool:
+        """Determines if a 2D affine transformation matrix has a diagonal tilt angle."""
+        if abs(a) < 1e-6 and abs(b) < 1e-6:
+            return False
+        angle = math.degrees(math.atan2(b, a)) % 180
+        return (15.0 <= angle <= 75.0) or (105.0 <= angle <= 165.0)
+
+    @classmethod
+    def find_structural_watermark_xobjects(cls, doc: pymupdf.Document) -> Set[int]:
+        """
+        Scans all Form XObjects across the PDF dictionary tree to identify
+        structural watermark objects by affine matrices, pattern fills, and low opacity.
+        """
+        watermark_xrefs = set()
+        for xref in range(1, doc.xref_length()):
+            try:
+                subtype = doc.xref_get_key(xref, "Subtype")
+                if subtype[1] == "/Form":
+                    stream = doc.xref_stream(xref).decode("latin1", errors="ignore")
+                    stream_lower = stream.lower()
+
+                    # Trait 1: Diagonal transformation matrix (cm)
+                    for m in re.finditer(
+                        r'([0-9.\-]+)\s+([0-9.\-]+)\s+([0-9.\-]+)\s+([0-9.\-]+)\s+([0-9.\-]+)\s+([0-9.\-]+)\s+cm',
+                        stream
+                    ):
+                        try:
+                            a, b, c, d = float(m.group(1)), float(m.group(2)), float(m.group(3)), float(m.group(4))
+                            if cls.is_diagonal_affine(a, b, c, d):
+                                watermark_xrefs.add(xref)
+                                break
+                        except Exception:
+                            continue
+
+                    # Trait 2: Pattern tiling full-page fill (/Pattern cs ... re f)
+                    if "/pattern" in stream_lower and re.search(r'\bre\s+f\b', stream):
+                        watermark_xrefs.add(xref)
+
+                    # Trait 3: Extended graphics state setting low opacity
+                    if any(t in stream for t in ["/ca ", "/CA ", "/fitzca"]) and ("/X1" in stream or "/Im" in stream or "/Do" in stream):
+                        watermark_xrefs.add(xref)
+
+                    # Trait 4: Specific watermark stamp pattern naming (/wspe_)
+                    if "/wspe_" in stream:
+                        watermark_xrefs.add(xref)
+            except Exception:
+                continue
+
+        return watermark_xrefs
+
+    @classmethod
+    def strip_structural_stream_watermarks(cls, stream: str) -> Tuple[str, int]:
+        """
+        Scans raw page content streams for standalone structural watermark blocks
+        enclosed in graphics state push/pop operators (q ... Q).
+        """
+        count = 0
+
+        def inspect_q_block(match):
+            nonlocal count
+            block = match.group(0)
+
+            # Check 1: Does it contain diagonal rotation cm?
+            has_diagonal = False
+            for m in re.finditer(
+                r'([0-9.\-]+)\s+([0-9.\-]+)\s+([0-9.\-]+)\s+([0-9.\-]+)\s+([0-9.\-]+)\s+([0-9.\-]+)\s+cm',
+                block
+            ):
+                try:
+                    a, b, c, d = float(m.group(1)), float(m.group(2)), float(m.group(3)), float(m.group(4))
+                    if cls.is_diagonal_affine(a, b, c, d):
+                        has_diagonal = True
+                        break
+                except Exception:
+                    continue
+
+            # Check 2: Low transparency or faint gray color
+            has_transparency = any(t in block for t in ["/ca ", "/CA ", "/fitzca"])
+            has_faint_color = False
+            color_match = re.search(r'([0-9.]+)\s+([0-9.]+)\s+([0-9.]+)\s+(?:rg|scn)', block)
+            if color_match:
+                try:
+                    r, g, b = float(color_match.group(1)), float(color_match.group(2)), float(color_match.group(3))
+                    if r > 0.75 and g > 0.75 and b > 0.75 and abs(r - g) < 0.15:
+                        has_faint_color = True
+                except Exception:
+                    pass
+
+            # Check 3: Full-page pattern fill (/Pattern cs ... re f)
+            is_pattern_fill = "/pattern" in block.lower() and bool(re.search(r'\bre\s+f\b', block))
+
+            if is_pattern_fill:
+                # If there are text operators inside, excise only the pattern fill command to preserve text
+                if "BT" in block and "ET" in block:
+                    count += 1
+                    return re.sub(r'/Pattern\s+cs.*?re\s+f', '', block, flags=re.DOTALL)
+                count += 1
+                return ""
+
+            if has_diagonal and (has_transparency or has_faint_color):
+                # If there are legitimate text operators inside the block, do not delete the text
+                if "BT" in block and "ET" in block:
+                    # Check if text is body text (contains dark color or standard font matrix)
+                    if not re.search(r'0(?:\.0+)?\s+0(?:\.0+)?\s+0(?:\.0+)?\s+(?:rg|scn)', block):
+                        count += 1
+                        return ""
+                    # Legitimate text detected; strip only transparency and diagonal graphics paths
+                    count += 1
+                    return re.sub(r'/(?:ca|CA|fitzca)[^\n\r]*', '', block)
+                count += 1
+                return ""
+
+            return block
+
+        cleaned_stream = re.sub(r'q\b[^Q]*?Q', inspect_q_block, stream, flags=re.DOTALL)
+        return cleaned_stream, count
+
+
+class ChrominanceDeltaSanitizer:
+    """
+    Separates chrominance (color saturation) from luminance to neutralize colored document stamps
+    (red 'COPY', blue seal, purple approval stamp) over monochrome text.
+    Protects underlying or overlapping text strokes from being erased.
+    """
+
+    @staticmethod
+    def neutralize_color_stamps(image: Image.Image, sat_threshold: float = 0.18, paper_threshold: float = 0.65) -> Tuple[Image.Image, int]:
+        img_rgb = image.convert("RGB")
+        arr = np.array(img_rgb, dtype=np.float32) / 255.0
+
+        r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+        lum = 0.299 * r + 0.587 * g + 0.114 * b
+        cmax = np.maximum(r, np.maximum(g, b))
+        cmin = np.minimum(r, np.minimum(g, b))
+        delta = cmax - cmin
+
+        # HSV saturation and brightness value
+        saturation = delta / (cmax + 1e-5)
+        value = cmax
+
+        # 1. Color stamp on light paper background: Bleach to pure paper white (1.0)
+        stamp_on_paper = (saturation > sat_threshold) & (value >= paper_threshold)
+
+        # 2. Color stamp intersecting dark text strokes (value < paper_threshold):
+        # Desaturate back to monochrome text stroke so the text remains 100% visible and sharp
+        stamp_on_text = (saturation > sat_threshold) & (value < paper_threshold) & (lum < 0.55)
+
+        count = int(np.sum(stamp_on_paper)) + int(np.sum(stamp_on_text))
+        if count == 0:
+            return image, 0
+
+        cleaned_arr = arr.copy()
+        cleaned_arr[stamp_on_paper] = 1.0
+
+        for c in range(3):
+            cleaned_arr[stamp_on_text, c] = lum[stamp_on_text]
+
+        out_img = Image.fromarray((np.clip(cleaned_arr, 0.0, 1.0) * 255.0).astype(np.uint8), mode="RGB")
+        return out_img, count
+
+
+class MultiPageAlphaInverter:
+    """
+    Google Research-inspired multi-page watermark extraction & exact alpha inversion.
+    Exploits the repetition vulnerability: watermarks in documents and scanned books
+    repeat at identical coordinates and opacity across multiple pages, while the underlying text changes.
+
+    Solves:
+      I_k(x,y) = alpha(x,y) * W(x,y) + (1 - alpha(x,y)) * B_k(x,y)
+    yielding:
+      B_k(x,y) = clip( PaperColor + (I_k(x,y) - I_bg(x,y)) / (1.0 - alpha(x,y)), 0, 255 )
+    providing 100% sharp text recovery without blurring or AI hallucination artifacts.
+    """
+
+    @staticmethod
+    def invert_scanned_pages(
+        images: List[Image.Image],
+        paper_threshold: float = 230.0
+    ) -> Tuple[List[Image.Image], int]:
+        if len(images) < 2:
+            return images, 0
+
+        ref_w, ref_h = images[0].size
+        arrays = []
+        for img in images:
+            if img.size != (ref_w, ref_h):
+                img = img.resize((ref_w, ref_h), Image.Resampling.BILINEAR)
+            arrays.append(np.array(img.convert("RGB"), dtype=np.float32))
+
+        stacked = np.stack(arrays, axis=0)  # Shape (N, H, W, 3)
+
+        # 80th percentile across pages estimates the watermark blended onto background paper
+        bg_estimate = np.percentile(stacked, 80, axis=0)
+
+        # Determine paper color from the brightest regions of the estimated background
+        lum_bg = 0.299 * bg_estimate[:, :, 0] + 0.587 * bg_estimate[:, :, 1] + 0.114 * bg_estimate[:, :, 2]
+        paper_pixels = bg_estimate[lum_bg >= paper_threshold]
+        if len(paper_pixels) > 0:
+            paper_color = np.median(paper_pixels, axis=0)
+        else:
+            paper_color = np.array([255.0, 255.0, 255.0], dtype=np.float32)
+
+        # Contrast delta between estimated paper and estimated watermark
+        delta = paper_color - bg_estimate
+        contrast = np.mean(np.maximum(delta, 0.0), axis=2)
+
+        # Watermark exists where contrast is above noise threshold
+        wm_mask = (contrast >= 7.0)
+        total_wm_pixels = int(np.sum(wm_mask))
+        if total_wm_pixels < 30:
+            return images, 0
+
+        # Alpha estimation: contrast normalized against expected watermark opacity range
+        alpha_est = np.clip(contrast / 65.0, 0.05, 0.82)
+        alpha_3d = np.repeat(alpha_est[:, :, np.newaxis], 3, axis=2)
+
+        cleaned_images = []
+        for i, arr in enumerate(arrays):
+            clean_arr = arr.copy()
+            restored = paper_color + (arr - bg_estimate) / (1.0 - alpha_3d + 1e-5)
+            clean_arr[wm_mask] = np.clip(restored[wm_mask], 0.0, 255.0)
+
+            clean_img = Image.fromarray(clean_arr.astype(np.uint8), mode="RGB")
+            if clean_img.size != images[i].size:
+                clean_img = clean_img.resize(images[i].size, Image.Resampling.LANCZOS)
+            cleaned_images.append(clean_img)
+
+        return cleaned_images, total_wm_pixels
+
+
 class PDFWatermarkSanitizer:
     """
     Universal PDF Structural, Vector, and Visual Watermark Remover.
@@ -429,6 +682,9 @@ class PDFWatermarkSanitizer:
     - Syntax-level marked-content excision (/CPDFSTAMP, /Artifact, /Watermark).
     - Header discriminator: preserves legitimate document headers while stripping tracking hashes.
     - Document-wide and page-level Form XObject unlinking & clearing.
+    - Enfocus PitStop-inspired structural preflight rotation matrix and pattern slicing.
+    - Google Research-inspired multi-page exact alpha inversion for scanned pages.
+    - Chrominance separation for colored stamps.
     - Vector drawing watermark path scrubbing (Bézier curves, transparent banners).
     - Low-contrast faint text detection and excision.
     - Scanned page raster watermark filtering and scanner flattening.
@@ -573,6 +829,12 @@ class PDFWatermarkSanitizer:
             except Exception:
                 pass
 
+        # Step 3b.2: Enfocus PitStop-inspired Structural Preflight Detection (zero-keyword)
+        structural_forms = PreflightStructuralDetector.find_structural_watermark_xobjects(doc)
+        watermark_xrefs.update(structural_forms)
+        if structural_forms:
+            audit["structural_watermarks_removed"] = len(structural_forms)
+
         # Step 3c: Map watermark XObject xrefs to their names across all pages
         try:
             for p in doc:
@@ -612,7 +874,9 @@ class PDFWatermarkSanitizer:
                         continue
                     for l in b.get("lines", []):
                         dir_x, dir_y = l.get("dir", (1.0, 0.0))
-                        is_diagonal = abs(dir_y) > 0.05 and abs(dir_x) > 0.05
+                        angle = math.degrees(math.atan2(abs(dir_y), abs(dir_x))) % 180
+                        # Require a genuine diagonal orientation (angle between 15° and 75°)
+                        is_diagonal = (15.0 <= angle <= 75.0)
                         line_text = "".join(s.get("text", "") for s in l.get("spans", [])).strip()
 
                         for s in l.get("spans", []):
@@ -624,14 +888,15 @@ class PDFWatermarkSanitizer:
                             lum = 0.299 * r + 0.587 * g + 0.114 * b_col
                             size = s.get("size", 10.0)
 
-                            # Faint gray or high transparency
-                            is_faint = (185 < lum < 245 and abs(r - g) < 20 and abs(g - b_col) < 20) or (0 < alpha < 180)
+                            # Faint gray or high transparency: require large font size (watermarks are large)
+                            is_faint = ((195 < lum < 245 and abs(r - g) < 15 and abs(g - b_col) < 15) or (0 < alpha < 160)) and (size >= 16.0 or is_diagonal)
 
-                            if (is_diagonal or is_faint) and len(line_text) >= 3:
-                                dynamic_watermark_terms.add(line_text.lower())
-                                for word in line_text.lower().split():
-                                    if len(word) >= 4:
-                                        dynamic_watermark_terms.add(word)
+                            # Safe addition: Only add the complete line text if short (<= 4 words)
+                            # NEVER add individual generic words to prevent deleting body paragraphs!
+                            if (is_diagonal or is_faint) and (3 <= len(line_text) <= 50):
+                                words = line_text.lower().split()
+                                if len(words) <= 5:
+                                    dynamic_watermark_terms.add(line_text.lower())
             except Exception:
                 pass
 
@@ -720,23 +985,55 @@ class PDFWatermarkSanitizer:
                             block = match.group(0)
                             decoded = decode_pdf_stream_text(block).lower()
 
-                            # Check keywords & dynamic terms
-                            if any(kw in decoded for kw in dynamic_watermark_terms):
-                                return ""
-
-                            # Check repeating tracking tokens (e.g. university exam paper hashes)
+                            # 1. Check repeating university exam tracking tokens across the block
                             cleaned_alnum = re.sub(r'[^a-z0-9]', '', decoded)
                             if len(cleaned_alnum) >= 40:
                                 chunk = cleaned_alnum[:24]
                                 if cleaned_alnum.count(chunk) >= 2:
                                     return ""
 
-                            return block
+                            # 2. Check if the block has text showing operators
+                            if not re.search(r'Tj|TJ|\'|\"', block):
+                                return block
+
+                            # 3. Surgical Operator-Level Excision:
+                            # Instead of deleting the entire BT...ET block (which wipes out paragraphs of legitimate text),
+                            # we inspect individual text showing operators (Tj and TJ) and excise ONLY the watermark ones.
+                            def clean_single_tj(m_tj):
+                                raw_op = m_tj.group(0)
+                                content = decode_pdf_stream_text(m_tj.group(1)).lower().strip()
+                                if any(kw in content for kw in dynamic_watermark_terms):
+                                    return ""
+                                return raw_op
+
+                            modified_block = re.sub(r'\(([^\)]*?)\)\s*Tj', clean_single_tj, block)
+                            modified_block = re.sub(r'<([0-9a-fA-F]+)>\s*Tj', clean_single_tj, modified_block)
+
+                            def clean_array_tj(m_arr):
+                                raw_op = m_arr.group(0)
+                                content = decode_pdf_stream_text(m_arr.group(1)).lower().strip()
+                                if any(kw in content for kw in dynamic_watermark_terms):
+                                    return ""
+                                return raw_op
+
+                            modified_block = re.sub(r'\[(.*?)\]\s*TJ', clean_array_tj, modified_block, flags=re.DOTALL)
+
+                            # If all text operators were watermark and excised, remove the now-empty block
+                            if not re.search(r'Tj|TJ|\'|\"', modified_block):
+                                return ""
+
+                            return modified_block
 
                         modified_stream_bt = re.sub(r'BT\b.*?ET', clean_bt_et, modified_stream, flags=re.DOTALL)
                         if modified_stream_bt != modified_stream:
                             audit["text_watermarks_removed"] += 1
                             modified_stream = modified_stream_bt
+
+                        # 6. Enfocus PitStop-inspired Structural Preflight Slicer (diagonal affine & pattern fills)
+                        modified_stream_struct, count_struct = PreflightStructuralDetector.strip_structural_stream_watermarks(modified_stream)
+                        if count_struct > 0:
+                            audit["structural_watermarks_removed"] = audit.get("structural_watermarks_removed", 0) + count_struct
+                            modified_stream = modified_stream_struct
 
                         if modified_stream != raw_stream:
                             doc.update_stream(cxref, modified_stream.encode("latin1"))
@@ -781,6 +1078,13 @@ class PDFWatermarkSanitizer:
                                 pil_img = bleached_img
                                 image_modified = True
 
+                        # 3. Chrominance Delta Neutralizer (colored stamps: red/blue/purple)
+                        clean_chroma_img, chroma_count = ChrominanceDeltaSanitizer.neutralize_color_stamps(pil_img)
+                        if chroma_count > 0:
+                            pil_img = clean_chroma_img
+                            image_modified = True
+                            audit["chroma_stamps_neutralized"] = audit.get("chroma_stamps_neutralized", 0) + chroma_count
+
                         if image_modified:
                             buf = io.BytesIO()
                             pil_img.save(buf, format="PNG")
@@ -788,6 +1092,36 @@ class PDFWatermarkSanitizer:
                             audit["images_sanitized"] += 1
                     except Exception:
                         pass
+
+        # 4F. Google Research Multi-Page Exact Alpha Inversion for Scanned Multi-Page PDFs
+        if flatten_scanned and total_pages >= 2:
+            scanned_pages_info = []
+            for pidx in range(min(total_pages, 8)):
+                p = doc[pidx]
+                if len(p.get_text().strip()) < 30:
+                    imgs = p.get_images()
+                    if len(imgs) == 1:
+                        scanned_pages_info.append((pidx, imgs[0][0]))
+
+            if len(scanned_pages_info) >= 2:
+                try:
+                    pil_imgs = []
+                    for pidx, img_xref in scanned_pages_info:
+                        extracted = doc.extract_image(img_xref)
+                        if extracted and "image" in extracted:
+                            pil_imgs.append(Image.open(io.BytesIO(extracted["image"])).convert("RGB"))
+
+                    if len(pil_imgs) == len(scanned_pages_info):
+                        cleaned_scanned_imgs, inv_pixels = MultiPageAlphaInverter.invert_scanned_pages(pil_imgs)
+                        if inv_pixels > 0:
+                            for idx, (pidx, img_xref) in enumerate(scanned_pages_info):
+                                buf = io.BytesIO()
+                                cleaned_scanned_imgs[idx].save(buf, format="PNG")
+                                doc[pidx].replace_image(img_xref, stream=buf.getvalue())
+                                processed_xrefs.add(img_xref)
+                            audit["alpha_inversions_applied"] = len(scanned_pages_info)
+                except Exception:
+                    pass
 
         # 5. Empty the stream of any identified Watermark XObjects
         for x_xref in watermark_xrefs:

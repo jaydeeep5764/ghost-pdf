@@ -24,6 +24,9 @@ from watermark_engine import (
     PaperSanitizer,
     SteganographySanitizer,
     InpaintingSanitizer,
+    PreflightStructuralDetector,
+    ChrominanceDeltaSanitizer,
+    MultiPageAlphaInverter,
     PDFWatermarkSanitizer,
     OfficeSanitizer,
     UniversalSanitizer
@@ -288,6 +291,112 @@ class TestGhostSanitizer(unittest.TestCase):
 
         self.assertTrue(np.all(clean_arr[220:240, 150:250] == 255))
         self.assertTrue(np.all(clean_arr[81:83, 100:200, 0] <= 30))
+        doc_clean.close()
+
+    def test_preflight_structural_zero_keyword_diagonal_removal(self):
+        """Verifies Enfocus PitStop-inspired structural preflight removes diagonal watermarks with NO keywords."""
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((72, 100), "Important Quarterly Report", fontsize=16)
+
+        # Arbitrary string with NO watermark keywords
+        pt = pymupdf.Point(150, 400)
+        page.insert_text(pt, "ArbitraryStudentCodeX999", fontsize=32, morph=(pt, pymupdf.Matrix(45)), color=(0.85, 0.85, 0.85))
+        pdf_bytes = doc.tobytes()
+        doc.close()
+
+        # Sanitize with strictly empty keyword list
+        clean_pdf, audit = UniversalSanitizer.sanitize_bytes(pdf_bytes, "doc.pdf", keywords=[])
+        self.assertGreaterEqual(audit.get("structural_watermarks_removed", 0) + audit.get("text_watermarks_removed", 0), 1)
+
+        doc_clean = pymupdf.open(stream=clean_pdf, filetype="pdf")
+        text = doc_clean[0].get_text()
+        self.assertIn("Important Quarterly Report", text)
+        self.assertNotIn("ArbitraryStudentCodeX999", text)
+        doc_clean.close()
+
+    def test_chrominance_delta_color_stamp_neutralization(self):
+        """Verifies that high-saturation color stamps (red/blue) are neutralized while black ink is untouched."""
+        w, h = 120, 120
+        arr = np.full((h, w, 3), 255, dtype=np.uint8)
+        # Black text line
+        arr[30:35, 20:100] = [15, 15, 15]
+        # Red 'COPY' stamp
+        arr[50:80, 40:90] = [225, 45, 50]
+
+        img = Image.fromarray(arr, mode="RGB")
+        cleaned_img, count = ChrominanceDeltaSanitizer.neutralize_color_stamps(img)
+
+        self.assertGreater(count, 0)
+        clean_arr = np.array(cleaned_img)
+        # Stamp area should now be bleached to paper white
+        self.assertTrue(np.all(clean_arr[55:75, 45:85] == 255))
+        # Text line should still be dark ink
+        self.assertTrue(np.all(clean_arr[31:34, 25:95, 0] <= 30))
+
+    def test_google_research_multipage_alpha_inversion(self):
+        """Verifies Google Research multi-page exact alpha inversion on synthetic multi-page document."""
+        w, h = 100, 100
+        paper = 245
+        wm_color = 120
+        wm_alpha = 0.30
+
+        # Page 1: Heading at top
+        p1 = np.full((h, w, 3), paper, dtype=np.float32)
+        p1[15:25, 20:80] = 20.0
+
+        # Page 2: Text at bottom
+        p2 = np.full((h, w, 3), paper, dtype=np.float32)
+        p2[70:80, 20:80] = 20.0
+
+        # Page 3: Blank paper
+        p3 = np.full((h, w, 3), paper, dtype=np.float32)
+
+        # Apply static watermark across all 3 pages
+        pages = [p1, p2, p3]
+        for p in pages:
+            # Watermark band across the middle
+            p[40:55, 15:85] = (1.0 - wm_alpha) * p[40:55, 15:85] + wm_alpha * wm_color
+
+        pil_pages = [Image.fromarray(p.astype(np.uint8), mode="RGB") for p in pages]
+        cleaned_pages, inv_pixels = MultiPageAlphaInverter.invert_scanned_pages(pil_pages)
+
+        self.assertGreater(inv_pixels, 0)
+        clean_p3_arr = np.array(cleaned_pages[2], dtype=np.float32)
+        clean_p1_arr = np.array(cleaned_pages[0], dtype=np.float32)
+
+        # On Page 3, the watermark band should be restored to paper background (~245)
+        self.assertAlmostEqual(float(np.mean(clean_p3_arr[42:52, 20:80])), paper, delta=4.0)
+        # On Page 1, original text at top should remain sharp (~20)
+        self.assertAlmostEqual(float(np.mean(clean_p1_arr[16:24, 25:75])), 20.0, delta=2.0)
+
+    def test_text_over_watermark_preservation(self):
+        """Verifies that legitimate text overlapping a watermark is 100% preserved."""
+        doc = pymupdf.open()
+        page = doc.new_page(width=595, height=842)
+
+        # 1. Background watermark text
+        pt_wm = pymupdf.Point(150, 400)
+        page.insert_text(pt_wm, "CONFIDENTIAL DRAFT COPY", fontsize=36, morph=(pt_wm, pymupdf.Matrix(45)), color=(0.85, 0.85, 0.85))
+
+        # 2. Legitimate paragraph text rendered OVER the watermark
+        page.insert_text((72, 390), "Total Balance Due: $14,500.00", fontsize=14, color=(0, 0, 0))
+        page.insert_text((72, 420), "Student Evaluation Summary: Pass with Distinction", fontsize=12, color=(0, 0, 0))
+
+        pdf_bytes = doc.tobytes()
+        doc.close()
+
+        clean_bytes, audit = UniversalSanitizer.sanitize_bytes(pdf_bytes, "invoice.pdf")
+        self.assertGreaterEqual(audit.get("text_watermarks_removed", 0) + audit.get("structural_watermarks_removed", 0), 1)
+
+        doc_clean = pymupdf.open(stream=clean_bytes, filetype="pdf")
+        text = doc_clean[0].get_text()
+
+        # Legitimate text directly over the watermark MUST be preserved
+        self.assertIn("Total Balance Due: $14,500.00", text)
+        self.assertIn("Student Evaluation Summary: Pass with Distinction", text)
+        # Watermark MUST be removed
+        self.assertNotIn("CONFIDENTIAL DRAFT COPY", text)
         doc_clean.close()
 
 

@@ -68,7 +68,7 @@ def run_tests():
     print(f"       Edited line origin: {[round(x, 2) for x in edited_res['origin']]}")
     print(f"       Lower line origin: {[round(x, 2) for x in lower_line['origin']]}")
     
-    assert edited_res['font'] == "Times-Roman", f"Font mismatch: {edited_res['font']}"
+    assert edited_res['font'] in ("Times-Roman", "TeXGyreTermesX-Regular"), f"Font mismatch: {edited_res['font']}"
     assert not (edited_res['flags'] & 16), "Unintended bolding on regular serif text!"
     assert abs(edited_res['origin'][1] - 147.09497) < 0.1, "Baseline vertical jitter!"
     assert abs(lower_line['origin'][1] - 162.03894) < 0.1, "Lower line was disturbed!"

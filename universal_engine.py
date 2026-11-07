@@ -12,6 +12,7 @@ Features:
 import pymupdf
 import os
 import re
+import base64
 
 FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 WIN_FONTS = r"C:\Windows\Fonts"
@@ -244,6 +245,46 @@ def find_max_available_width(page: pymupdf.Page, insert_x: float, target_rect: p
     return max(target_rect.width, right_margin - insert_x)
 
 
+
+def replace_image_with_reflow(doc: pymupdf.Document, page: pymupdf.Page, edit: dict):
+    bbox = edit.get("bbox")
+    if not bbox:
+        return
+    rect = pymupdf.Rect(bbox)
+    bg_color = sample_background_color(page, rect)
+    page.add_redact_annot(rect, fill=bg_color)
+    page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_ALL)
+
+    image_b64 = edit.get("image_base64", "")
+    if image_b64:
+        if "," in image_b64:
+            image_b64 = image_b64.split(",")[1]
+        try:
+            img_bytes = base64.b64decode(image_b64)
+            target_w = float(edit.get("target_width", rect.width))
+            target_h = float(edit.get("target_height", rect.height))
+            new_rect = pymupdf.Rect(rect.x0, rect.y0, rect.x0 + target_w, rect.y0 + target_h)
+            page.insert_image(new_rect, stream=img_bytes)
+        except Exception as e:
+            print(f"Error inserting replacement image: {e}")
+
+
+def delete_image_with_reflow(doc: pymupdf.Document, page: pymupdf.Page, edit: dict):
+    bbox = edit.get("bbox")
+    if not bbox:
+        return
+    rect = pymupdf.Rect(bbox)
+    bg_color = sample_background_color(page, rect)
+    page.add_redact_annot(rect, fill=bg_color)
+    page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_ALL)
+
+
+def reflow_and_replace_text(doc: pymupdf.Document, page: pymupdf.Page, edit: dict):
+    """Fallback handler for reflow replacement: ensures edit is applied cleanly."""
+    edit_copy = dict(edit)
+    edit_copy["reflow"] = False
+    return apply_universal_edit(doc, edit_copy)
+
 def apply_universal_edit(doc: pymupdf.Document, edit: dict):
     """
     Applies clean, atomic, Adobe-grade edits to a PDF document:
@@ -260,6 +301,19 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
     page = doc[p_idx]
     e_type = edit.get("type", "replace")
 
+    # 1. Primary Strategy: True Low-Level Content Stream Mutation (Adobe / Foxit / PDF-XChange Architecture)
+    # Directly mutates PostScript content streams (Tj, TJ, Tf, Tm, Td, TL, T*, Do); zero redaction overlays
+    try:
+        try:
+            from pdf_engine.lowlevel_engine import apply_lowlevel_edit
+        except ImportError:
+            from lowlevel_engine import apply_lowlevel_edit
+        if apply_lowlevel_edit(doc, page, edit):
+            return
+    except Exception as e:
+        print(f"Low-level stream mutation fallback: {e}")
+
+    # Fallback handlers for legacy image operations if stream search missed
     if e_type == "replace_image":
         replace_image_with_reflow(doc, page, edit)
         return
@@ -268,15 +322,12 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
         delete_image_with_reflow(doc, page, edit)
         return
 
-    if e_type == "replace":
+    # 2. Secondary Strategy: High-Fidelity Surface Redaction & Typography Reflow
+    if e_type in ("replace", "move"):
         has_new_pos = (edit.get("new_x") is not None and edit.get("new_y") is not None)
         do_reflow = edit.get("reflow", True)
 
-        if not has_new_pos and do_reflow:
-            reflow_and_replace_text(doc, page, edit)
-            return
-
-        # Direct in-place or moved replacement without full document reflow
+        # Direct in-place or moved replacement
         old_text = edit.get("oldText", "")
         new_text = edit.get("newText", "")
 
@@ -288,7 +339,11 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
             return
 
         explicit_bold = edit.get("is_bold")
+        if explicit_bold is None and "flags" in edit:
+            explicit_bold = bool(int(edit["flags"]) & 2)
         explicit_italic = edit.get("is_italic")
+        if explicit_italic is None and "flags" in edit:
+            explicit_italic = bool(int(edit["flags"]) & 1)
         custom_size = edit.get("custom_size", False)
         color_val = edit.get("color")
 
@@ -345,6 +400,12 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
             true_baseline_y = target_rect.y0 + (target_rect.height * 0.80)
             insert_x = target_rect.x0
 
+        if has_new_pos:
+            orig_top_y = target_rect.y0
+            insert_x = float(edit["new_x"])
+            dy = float(edit["new_y"]) - orig_top_y
+            true_baseline_y = true_baseline_y + dy
+
         # Preserve exact font, flags, and color from the original span
         if span_info:
             if not font_name or font_name == "helv":
@@ -366,28 +427,20 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
             parsed_color = parse_color(color_val or "#000000")
 
         # 3. Font Resolution & Accurate Weight Matching
-        emb_font = find_matching_embedded_font(doc, page, font_name, is_bold=explicit_bold, is_italic=explicit_italic)
-        if emb_font:
-            font_info = emb_font
-            font_kwargs = {"fontname": emb_font["name"]}
-            try:
-                measure_font = pymupdf.Font(fontbuffer=emb_font["buffer"])
-            except Exception:
-                measure_font = pymupdf.Font("times-roman" if any(s in font_name.lower() for s in ["roman", "serif", "times", "termes"]) else "helv")
+        emb_font = None  # Use reliable full-encoding fonts to avoid subset glyph omissions
+        font_info = resolve_font(font_name, flags, is_bold=explicit_bold, is_italic=explicit_italic)
+        font_kwargs = {}
+        if font_info.get("is_base14", False):
+            font_kwargs["fontname"] = font_info["name"]
+            measure_font = pymupdf.Font(font_info["name"])
+        elif "file" in font_info and os.path.exists(font_info["file"]):
+            f_obj = pymupdf.Font(fontfile=font_info["file"])
+            tag = f"f_{abs(hash(font_info['name']))%100000}"
+            font_kwargs["fontname"] = tag
+            measure_font = f_obj
         else:
-            font_info = resolve_font(font_name, flags, is_bold=explicit_bold, is_italic=explicit_italic)
-            font_kwargs = {}
-            if font_info.get("is_base14", False):
-                font_kwargs["fontname"] = font_info["name"]
-                measure_font = pymupdf.Font(font_info["name"])
-            elif "file" in font_info and os.path.exists(font_info["file"]):
-                f_obj = pymupdf.Font(fontfile=font_info["file"])
-                tag = f"f_{abs(hash(font_info['name']))%100000}"
-                font_kwargs["fontname"] = tag
-                measure_font = f_obj
-            else:
-                font_kwargs["fontname"] = font_info.get("name", "helv")
-                measure_font = pymupdf.Font(font_info.get("name", "helv"))
+            font_kwargs["fontname"] = font_info.get("name", "helv")
+            measure_font = pymupdf.Font(font_info.get("name", "helv"))
 
         # 4. Check if this is a Multi-Line Paragraph Edit or Single-Line Edit
         lines = new_clean.split("\n")
@@ -421,6 +474,7 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
                             erase_y1 = max(erase_y1, s_r.y1 + 2.5)
 
             erase_rect = pymupdf.Rect(erase_x0, erase_y0, erase_x1, erase_y1)
+            page.draw_rect(erase_rect, color=None, fill=bg_color)
             page.add_redact_annot(erase_rect, fill=bg_color)
             page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE)
 
@@ -458,13 +512,15 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
             # 4. Draw multi-line paragraph line-by-line anchored to true baseline
             line_spacing = max(11.5, size * 1.22)
             first_line_baseline = true_baseline_y if len(formatted_lines) == 1 else (target_rect.y0 + (size * 0.85))
+            if has_new_pos:
+                first_line_baseline = (float(edit["new_y"]) + (size * 0.85)) if len(formatted_lines) > 1 else true_baseline_y
 
             for i, line_text in enumerate(formatted_lines):
                 if not line_text:
                     continue
                 line_y = first_line_baseline + (i * line_spacing)
                 page.insert_text(
-                    pymupdf.Point(target_rect.x0, line_y),
+                    pymupdf.Point(insert_x, line_y),
                     line_text,
                     fontsize=size,
                     color=parsed_color,
@@ -506,14 +562,23 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
                     actual_drawn_width = natural_width
 
         # 7. Clean Single-Line Redaction (Full envelope)
-        erase_width = max(target_rect.width, actual_drawn_width)
-        erase_rect = pymupdf.Rect(
-            min(insert_x, target_rect.x0) - 1.0,
-            clean_y0,
-            max(insert_x + erase_width, target_rect.x1) + 1.0,
-            clean_y1
-        )
+        if has_new_pos:
+            erase_rect = pymupdf.Rect(
+                target_rect.x0 - 1.0,
+                clean_y0,
+                target_rect.x1 + 1.0,
+                clean_y1
+            )
+        else:
+            erase_width = max(target_rect.width, actual_drawn_width)
+            erase_rect = pymupdf.Rect(
+                min(insert_x, target_rect.x0) - 1.0,
+                clean_y0,
+                max(insert_x + erase_width, target_rect.x1) + 1.0,
+                clean_y1
+            )
 
+        page.draw_rect(erase_rect, color=None, fill=bg_color)
         page.add_redact_annot(erase_rect, fill=bg_color)
         page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE)
 
@@ -561,6 +626,10 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
         else:
             active_font = font_info.get("name", "helv")
 
+        lines = new_text.split("\n")
+        baseline_y = y + (size * 0.85)
+        line_height = max(11.5, size * 1.22)
+
         for idx, line_str in enumerate(lines):
             line_txt = line_str.strip()
             if line_txt:
@@ -590,5 +659,6 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
                 rect.x1 + pad,
                 rect.y1 + pad
             )
-            page.add_redact_annot(erase_rect, fill=bg_color)
+            page.draw_rect(erase_rect, color=None, fill=bg_color)
+        page.add_redact_annot(erase_rect, fill=bg_color)
         page.apply_redactions(images=pymupdf.PDF_REDACT_IMAGE_NONE)

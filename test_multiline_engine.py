@@ -58,7 +58,8 @@ def test_multiline():
             for line in block['lines']:
                 for span in line['spans']:
                     if 'PyTorch' in span['text']:
-                        print(f"Verified rendered span: text='{span['text']}' | font='{span['font']}' | flags={span['flags']}")
+                        safe_txt = span['text'].encode('ascii', 'replace').decode('ascii')
+                        print(f"Verified rendered span: text='{safe_txt}' | font='{span['font']}' | flags={span['flags']}")
 
 if __name__ == '__main__':
     test_multiline()

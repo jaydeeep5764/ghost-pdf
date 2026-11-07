@@ -822,6 +822,9 @@
                 rebuildInteractiveOverlay();
                 renderSearchHighlights();
             };
+            if (data.is_scanned) {
+                setStatus('📸 Scanned / Photo PDF: AI OCR recognized text into editable boxes! Click any word to edit.', 'success');
+            }
         }
 
         function rebuildInteractiveOverlay() {
@@ -991,6 +994,13 @@
                 } else {
                     goToNextMatch();
                 }
+            }
+        });
+
+        findReplaceInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                findReplaceCurrentBtn.click();
             }
         });
 
@@ -1478,6 +1488,14 @@
             }
         });
 
+        // Also allow Enter anywhere in the card
+        editorCard.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey && document.activeElement !== editorTextInput) {
+                e.preventDefault();
+                commitActiveEditor();
+            }
+        });
+
         async function commitActiveEditor() {
             if (!activeEditorTarget) return;
 
@@ -1492,12 +1510,22 @@
                 Math.abs(activeEditorTarget.y - activeEditorTarget.origY) > 1
             );
 
-            if (!activeEditorTarget.isNew && newTextVal === activeEditorTarget.origItem.text && !isPositionChanged) {
+            const isStyleChanged = (
+                Math.abs(activeEditorTarget.size - (activeEditorTarget.origItem?.size || 12)) > 0.1 ||
+                activeEditorTarget.flags !== (activeEditorTarget.origItem?.flags || 0) ||
+                activeEditorTarget.color !== (activeEditorTarget.origItem?.color || '#000000') ||
+                activeEditorTarget.font !== (activeEditorTarget.origItem?.font || 'helv')
+            );
+
+            if (!activeEditorTarget.isNew && newTextVal === activeEditorTarget.origItem.text && !isPositionChanged && !isStyleChanged) {
                 closeEditorCard();
                 return;
             }
 
-            setStatus('Reflowing & applying clean edit...', 'loading');
+            setStatus('Reflowing & applying clean edit to content stream...', 'loading');
+            editorApplyBtn.disabled = true;
+            editorApplyBtn.innerHTML = '<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i><span>Applying...</span>';
+            lucide.createIcons();
 
             let payload = null;
 
@@ -1511,7 +1539,9 @@
                     size: activeEditorTarget.size,
                     color: activeEditorTarget.color,
                     font: activeEditorTarget.font,
-                    flags: activeEditorTarget.flags
+                    flags: activeEditorTarget.flags,
+                    is_bold: Boolean(activeEditorTarget.flags & 2),
+                    is_italic: Boolean(activeEditorTarget.flags & 1)
                 };
             } else {
                 payload = {
@@ -1524,6 +1554,9 @@
                     color: activeEditorTarget.color,
                     font: activeEditorTarget.font,
                     flags: activeEditorTarget.flags,
+                    is_bold: Boolean(activeEditorTarget.flags & 2),
+                    is_italic: Boolean(activeEditorTarget.flags & 1),
+                    custom_size: Math.abs(activeEditorTarget.size - (activeEditorTarget.origItem?.size || 12)) > 0.1,
                     reflow: editorReflowToggle.checked
                 };
                 if (isPositionChanged) {
@@ -1544,14 +1577,18 @@
 
                 if (resData.status === 'success') {
                     renderPageData(resData.data);
-                    setStatus('Edit applied seamlessly with anti-overlap reflow!', 'success');
+                    setStatus('Edit applied cleanly to vector stream!', 'success');
                 } else {
                     alert('Error applying edit: ' + resData.message);
                     setStatus('Error applying edit', 'error');
                 }
             } catch (err) {
-                alert('Network error: ' + err.message);
+                alert('Network error applying edit: ' + err.message);
                 setStatus('Network error', 'error');
+            } finally {
+                editorApplyBtn.disabled = false;
+                editorApplyBtn.innerHTML = '<i data-lucide="check" class="w-3.5 h-3.5"></i><span>Apply (Enter)</span>';
+                lucide.createIcons();
             }
         }
 
@@ -2253,13 +2290,12 @@
             renderSearchHighlights();
         });
 
-        // Initial Load
-        loadPage(0);
+        // Initial Load placed at bottom of script after all declarations
     
         // -------------------------------------------------------------
         // TWO MASTER USER OPTIONS: 1. Watermark Remover vs 2. PDF Editor
         // -------------------------------------------------------------
-        let currentMasterMode = 'watermark'; // 'watermark' or 'editor'
+        let currentMasterMode = 'editor'; // 'watermark' or 'editor'
 
         const modeWatermarkTab = document.getElementById('modeWatermarkTab');
         const modeEditorTab = document.getElementById('modeEditorTab');
@@ -2273,6 +2309,14 @@
         const wmOptScanned = document.getElementById('wmOptScanned');
         const wmOptDots = document.getElementById('wmOptDots');
         const wmCustomKeywords = document.getElementById('wmCustomKeywords');
+        if (wmCustomKeywords) {
+            wmCustomKeywords.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    purgeAllWatermarksBtn.click();
+                }
+            });
+        }
 
         function setMasterMode(mode) {
             currentMasterMode = mode;
@@ -2416,10 +2460,16 @@
             document.body.removeChild(a);
         }
 
-        // Initialize to Watermark mode on load
-        window.addEventListener('DOMContentLoaded', () => {
-            setMasterMode('watermark');
-        });
+        // Initialize directly to PDF Editor mode on load
+        if (document.readyState === 'loading') {
+            window.addEventListener('DOMContentLoaded', () => {
+                setMasterMode('editor');
+                loadPage(0);
+            });
+        } else {
+            setMasterMode('editor');
+            loadPage(0);
+        }
 
     </script>
 </body>

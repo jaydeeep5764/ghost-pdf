@@ -32,6 +32,127 @@ try:
 except Exception as e:
     print(f"Sample load warning: {e}")
 
+OCR_ENGINE = None
+
+def get_ocr_engine():
+    global OCR_ENGINE
+    if OCR_ENGINE is None:
+        try:
+            from rapidocr_onnxruntime import RapidOCR
+            OCR_ENGINE = RapidOCR()
+        except Exception as e:
+            print(f"RapidOCR initialization notice: {e}")
+            OCR_ENGINE = False
+    return OCR_ENGINE if OCR_ENGINE is not False else None
+
+def extract_ocr_text_data(page: pymupdf.Page):
+    """
+    Runs high-performance OCR on scanned / photo-converted PDF pages
+    to detect lines, words, and exact bounding boxes for full interactive editing.
+    """
+    engine = get_ocr_engine()
+    if not engine:
+        return [], [], []
+
+    try:
+        import numpy as np
+        from PIL import Image
+        import io
+
+        pix = page.get_pixmap(dpi=150)
+        img_bytes = pix.tobytes("png")
+        pil_img = Image.open(io.BytesIO(img_bytes))
+        img_np = np.array(pil_img)
+
+        ocr_results, _ = engine(img_np)
+        if not ocr_results:
+            return [], [], []
+
+        scale_x = page.rect.width / pil_img.width
+        scale_y = page.rect.height / pil_img.height
+
+        words = []
+        lines = []
+        blocks = []
+
+        w_id = 0
+        l_id = 0
+
+        for r_idx, r in enumerate(ocr_results):
+            raw_text = r[1].strip()
+            if not raw_text:
+                continue
+
+            box = r[0]
+            bx0 = round(min(pt[0] for pt in box) * scale_x, 2)
+            by0 = round(min(pt[1] for pt in box) * scale_y, 2)
+            bx1 = round(max(pt[0] for pt in box) * scale_x, 2)
+            by1 = round(max(pt[1] for pt in box) * scale_y, 2)
+            l_bbox = [bx0, by0, bx1, by1]
+
+            line_height = max(8.0, by1 - by0)
+            est_size = round(line_height * 0.75, 1)
+
+            try:
+                sample_p = pix.pixel(int(bx0 / scale_x + 2), int((by0 + by1) / (2 * scale_y)))
+                col = f"#{sample_p[0]:02x}{sample_p[1]:02x}{sample_p[2]:02x}"
+            except Exception:
+                col = "#1E293B"
+
+            line_item = {
+                "id": f"l_ocr_{l_id}",
+                "text": raw_text,
+                "bbox": l_bbox,
+                "font": "helv",
+                "size": est_size,
+                "color": col,
+                "flags": 0,
+                "is_bold": False,
+                "is_italic": False,
+                "line_count": 1,
+                "block_idx": r_idx,
+                "is_ocr": True
+            }
+            lines.append(line_item)
+            blocks.append(dict(line_item, id=f"b_ocr_{l_id}"))
+            l_id += 1
+
+            token_list = raw_text.split()
+            if len(token_list) <= 1:
+                words.append(dict(line_item, id=f"w_ocr_{w_id}", block_idx=r_idx, line_idx=l_id, word_idx=0))
+                w_id += 1
+            else:
+                total_chars = max(1, sum(len(t) for t in token_list) + len(token_list) - 1)
+                curr_x = bx0
+                total_w = max(10.0, bx1 - bx0)
+
+                for w_idx, tok in enumerate(token_list):
+                    frac = len(tok) / total_chars
+                    tok_w = round(total_w * frac, 2)
+                    wb = [round(curr_x, 2), by0, round(curr_x + tok_w, 2), by1]
+                    words.append({
+                        "id": f"w_ocr_{w_id}",
+                        "text": tok,
+                        "bbox": wb,
+                        "font": "helv",
+                        "size": est_size,
+                        "color": col,
+                        "flags": 0,
+                        "is_bold": False,
+                        "is_italic": False,
+                        "block_idx": r_idx,
+                        "line_idx": l_id,
+                        "word_idx": w_idx,
+                        "is_ocr": True
+                    })
+                    w_id += 1
+                    curr_x += tok_w + (total_w / total_chars)
+
+        return words, lines, blocks
+    except Exception as e:
+        print(f"Error during OCR extraction: {e}")
+        return [], [], []
+
 def get_page_payload(pdf_bytes, page_idx=0):
     doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
     total_pages = len(doc)
@@ -86,6 +207,8 @@ def get_page_payload(pdf_bytes, page_idx=0):
                 "size": sz,
                 "color": col,
                 "flags": flg,
+                "is_bold": bool(flg & 16),
+                "is_italic": bool(flg & 2),
                 "block_idx": w[5],
                 "line_idx": w[6],
                 "word_idx": w[7]
@@ -111,6 +234,9 @@ def get_page_payload(pdf_bytes, page_idx=0):
                         "size": sz,
                         "color": col,
                         "flags": flg,
+                        "is_bold": bool(flg & 16),
+                        "is_italic": bool(flg & 2),
+                        "line_count": 1,
                         "block_idx": b_idx
                     })
                     line_id += 1
@@ -126,8 +252,21 @@ def get_page_payload(pdf_bytes, page_idx=0):
                     "font": f,
                     "size": sz,
                     "color": col,
-                    "flags": flg
+                    "flags": flg,
+                    "is_bold": bool(flg & 16),
+                    "is_italic": bool(flg & 2),
+                    "line_count": len(b_line_texts)
                 })
+
+    # Fallback to AI OCR for scanned / photo-converted PDFs
+    is_scanned = False
+    if len(words) == 0:
+        ocr_w, ocr_l, ocr_b = extract_ocr_text_data(page)
+        if ocr_w:
+            words = ocr_w
+            lines = ocr_l
+            blocks = ocr_b
+            is_scanned = True
 
     # Images extraction
     images = []
@@ -162,7 +301,8 @@ def get_page_payload(pdf_bytes, page_idx=0):
         "images": images,
         "spans": words,
         "can_undo": can_undo,
-        "can_redo": can_redo
+        "can_redo": can_redo,
+        "is_scanned": is_scanned
     }
 
 class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
@@ -592,7 +732,7 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     os.chdir(WEB_DIR)
-    socketserver.TCPServer.allow_reuse_address = True
-    with socketserver.TCPServer(("", PORT), PDFEditorHandler) as httpd:
+    http.server.ThreadingHTTPServer.allow_reuse_address = True
+    with http.server.ThreadingHTTPServer(("", PORT), PDFEditorHandler) as httpd:
         print(f"[*] GhostPDF Universal Studio Running at: http://localhost:{PORT}")
         httpd.serve_forever()
