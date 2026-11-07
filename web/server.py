@@ -18,6 +18,8 @@ PORT = 3000
 WEB_DIR = os.path.dirname(os.path.abspath(__file__))
 
 ACTIVE_PDF_BYTES = None
+ACTIVE_ORIGINAL_FILENAME = "document.pdf"
+ACTIVE_IS_IMAGE = False
 HISTORY = []
 HISTORY_INDEX = -1
 MAX_HISTORY = 40
@@ -114,14 +116,18 @@ def extract_ocr_text_data(page: pymupdf.Page):
             except Exception:
                 col = "#1E293B"
 
+            is_academic = any(kw in raw_text.lower() for kw in ["paper", "exam", "subject", "question", "marks", "q.", "figure", "code", "semester", "university", "calculate", "determine", "section", "mechanics", "engineering"]) or any(kw in " ".join(r[1] for r in ocr_results).lower() for kw in ["paper", "subject code", "engineering", "question", "marks", "university"])
+            doc_font = "times" if is_academic else "helv"
+            doc_flags = 4 if is_academic else 0
+
             line_item = {
                 "id": f"l_ocr_{l_id}",
                 "text": raw_text,
                 "bbox": l_bbox,
-                "font": "helv",
+                "font": doc_font,
                 "size": est_size,
                 "color": col,
-                "flags": 0,
+                "flags": doc_flags,
                 "is_bold": False,
                 "is_italic": False,
                 "line_count": 1,
@@ -201,6 +207,11 @@ def get_page_payload(pdf_bytes, page_idx=0):
             if inter > best_area:
                 best_area = inter
                 best = s
+        if not best and spans:
+            cx = (rect.x0 + rect.x1) / 2.0
+            cy = (rect.y0 + rect.y1) / 2.0
+            best = min(spans, key=lambda s: abs((s["bbox"][0] + s["bbox"][2])/2.0 - cx) + abs((s["bbox"][1] + s["bbox"][3])/2.0 - cy))
+
         if best:
             c_int = best["color"]
             hex_color = f"#{(c_int>>16)&0xFF:02x}{(c_int>>8)&0xFF:02x}{c_int&0xFF:02x}"
@@ -273,16 +284,6 @@ def get_page_payload(pdf_bytes, page_idx=0):
                     "line_count": len(b_line_texts)
                 })
 
-    # Fallback to AI OCR for scanned / photo-converted PDFs
-    is_scanned = False
-    if len(words) == 0:
-        ocr_w, ocr_l, ocr_b = extract_ocr_text_data(page)
-        if ocr_w:
-            words = ocr_w
-            lines = ocr_l
-            blocks = ocr_b
-            is_scanned = True
-
     # Images extraction
     images = []
     for img_idx, img_info in enumerate(page.get_images()):
@@ -298,6 +299,55 @@ def get_page_payload(pdf_bytes, page_idx=0):
                 "pixel_width": img_info[2],
                 "pixel_height": img_info[3]
             })
+
+    # Robust Scanned / Photo PDF detection
+    # A page is scanned if it has 0 vector words, OR if it has a large full-page background image with few vector words
+    page_area = max(1.0, pw * ph)
+    has_full_bg_image = False
+    for img in images:
+        img_w = img.get("width", 0)
+        img_h = img.get("height", 0)
+        if (img_w * img_h / page_area) > 0.50:
+            has_full_bg_image = True
+            break
+
+    is_scanned = False
+    if len(words) == 0 or (has_full_bg_image and len(words) < 50):
+        ocr_w, ocr_l, ocr_b = extract_ocr_text_data(page)
+        if ocr_w:
+            is_scanned = True
+            if len(words) == 0:
+                words = ocr_w
+                lines = ocr_l
+                blocks = ocr_b
+            else:
+                # Merge newly edited vector words with remaining OCR words
+                merged_words = []
+                used_vec = set()
+                for ow in ocr_w:
+                    ow_rect = pymupdf.Rect(ow["bbox"])
+                    matched_vw = None
+                    for v_idx, vw in enumerate(words):
+                        vw_rect = pymupdf.Rect(vw["bbox"])
+                        if (ow_rect & vw_rect).get_area() > 0 or (abs(ow_rect.y0 - vw_rect.y0) < 6 and abs(ow_rect.x0 - vw_rect.x0) < 12):
+                            matched_vw = vw
+                            used_vec.add(v_idx)
+                            break
+                    if matched_vw:
+                        merged_words.append(matched_vw)
+                    else:
+                        merged_words.append(ow)
+
+                for v_idx, vw in enumerate(words):
+                    if v_idx not in used_vec and vw not in merged_words:
+                        merged_words.append(vw)
+
+                words = merged_words
+                if len(lines) < len(ocr_l) * 0.5:
+                    lines = ocr_l
+                    blocks = ocr_b
+
+
 
     doc.close()
 
@@ -322,6 +372,7 @@ def get_page_payload(pdf_bytes, page_idx=0):
 
 class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
+        global ACTIVE_PDF_BYTES, ACTIVE_ORIGINAL_FILENAME, ACTIVE_IS_IMAGE
         url = urllib.parse.urlparse(self.path)
         
         if url.path == "/" or url.path == "/index.html":
@@ -333,7 +384,6 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         if url.path == "/api/sample":
-            global ACTIVE_PDF_BYTES
             if ACTIVE_PDF_BYTES is None:
                 self.send_error(404, "No PDF loaded")
                 return
@@ -355,6 +405,29 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
             if ACTIVE_PDF_BYTES is None:
                 self.send_json({"status": "error", "message": "No document active"}, status=400)
                 return
+
+            # If original upload was an image, extract and return the sanitized image directly
+            if ACTIVE_IS_IMAGE:
+                try:
+                    doc = pymupdf.open(stream=ACTIVE_PDF_BYTES, filetype="pdf")
+                    imgs = doc[0].get_images()
+                    if imgs:
+                        img_data = doc.extract_image(imgs[0][0])["image"]
+                        doc.close()
+                        b64_img = base64.b64encode(img_data).decode("ascii")
+                        base_name, file_ext = os.path.splitext(ACTIVE_ORIGINAL_FILENAME)
+                        out_name = f"{base_name}_clean{file_ext}"
+                        self.send_json({
+                            "status": "success",
+                            "pdf_base64": b64_img,
+                            "filename": out_name,
+                            "is_image": True
+                        })
+                        return
+                    doc.close()
+                except Exception as ex:
+                    print(f"Image export notice: {ex}")
+
             b64_res = base64.b64encode(ACTIVE_PDF_BYTES).decode("ascii")
             self.send_json({
                 "status": "success",
@@ -366,7 +439,7 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
         return super().do_GET()
 
     def do_POST(self):
-        global ACTIVE_PDF_BYTES, HISTORY, HISTORY_INDEX
+        global ACTIVE_PDF_BYTES, HISTORY, HISTORY_INDEX, ACTIVE_ORIGINAL_FILENAME, ACTIVE_IS_IMAGE
         url = urllib.parse.urlparse(self.path)
 
         if url.path == "/api/upload":
@@ -383,12 +456,14 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
 
                 # Check format
                 ext = os.path.splitext(filename)[1].lower() if filename else ".pdf"
-                image_extensions = ('.png', '.jpg', '.jpeg', '.webp', '.tiff', '.bmp')
+                image_extensions = ('.png', '.jpg', '.jpeg', '.jfif', '.webp', '.tiff', '.tif', '.bmp')
                 is_image = ext in image_extensions or uploaded_bytes.startswith((b'\x89PNG', b'\xff\xd8\xff', b'RIFF', b'II*\x00', b'MM\x00*'))
+                ACTIVE_ORIGINAL_FILENAME = filename
+                ACTIVE_IS_IMAGE = bool(is_image)
 
                 if not uploaded_bytes.startswith(b"%PDF") and is_image:
                     try:
-                        ft = ext.lstrip(".") if ext in image_extensions else "png"
+                        ft = "jpeg" if ext in (".jfif", ".jpg", ".jpeg") else (ext.lstrip(".") if ext in image_extensions else "png")
                         img_doc = pymupdf.open(stream=uploaded_bytes, filetype=ft)
                         uploaded_bytes = img_doc.convert_to_pdf()
                         ext = ".pdf"
@@ -731,6 +806,31 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json({"status": "error", "message": "No document active"}, status=400)
                 return
 
+            # If the active document was loaded from an image, export clean image directly
+            if ACTIVE_IS_IMAGE:
+                try:
+                    doc = pymupdf.open(stream=ACTIVE_PDF_BYTES, filetype="pdf")
+                    imgs = doc[0].get_images()
+                    if imgs:
+                        img_info = imgs[0]
+                        img_data = doc.extract_image(img_info[0])["image"]
+                        doc.close()
+                        b64_img = base64.b64encode(img_data).decode("ascii")
+                        base_name, file_ext = os.path.splitext(ACTIVE_ORIGINAL_FILENAME)
+                        out_name = f"{base_name}_clean{file_ext}"
+                        mime = "image/jpeg" if file_ext.lower() in [".jpg", ".jpeg", ".jfif"] else "image/png"
+                        self.send_json({
+                            "status": "success",
+                            "pdf_base64": b64_img,
+                            "filename": out_name,
+                            "mime_type": mime,
+                            "is_image": True
+                        })
+                        return
+                    doc.close()
+                except Exception as ex:
+                    print(f"Image export notice: {ex}")
+
             # Clean and compress for export
             doc = pymupdf.open(stream=ACTIVE_PDF_BYTES, filetype="pdf")
             out_buf = io.BytesIO()
@@ -742,7 +842,8 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json({
                 "status": "success",
                 "pdf_base64": b64_res,
-                "filename": "edited_clean.pdf"
+                "filename": "edited_clean.pdf",
+                "mime_type": "application/pdf"
             })
             return
 

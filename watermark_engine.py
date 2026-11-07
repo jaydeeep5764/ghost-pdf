@@ -1344,25 +1344,44 @@ class PDFWatermarkSanitizer:
                         pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
                         image_modified = False
 
-                        # 1. Printer tracking dots
-                        clean_dots_img, dots = PaperSanitizer.remove_printer_tracking_dots(pil_img)
-                        if dots > 0:
-                            pil_img = clean_dots_img
-                            image_modified = True
+                        # Distinguish paper document scans from color photos / graphics
+                        im_rgb = np.array(pil_img, dtype=np.float32)
+                        r, g, b = im_rgb[:, :, 0], im_rgb[:, :, 1], im_rgb[:, :, 2]
+                        lum = 0.299 * r + 0.587 * g + 0.114 * b
+                        max_c = np.maximum(np.maximum(r, g), b)
+                        min_c = np.minimum(np.minimum(r, g), b)
+                        sat = np.where(max_c > 0, (max_c - min_c) / (max_c + 1e-5), 0.0)
+                        paper_pixels = (lum > 220) & (sat < 0.15)
+                        is_paper_doc = float(np.mean(paper_pixels)) >= 0.55
 
-                        # 2. Bleach scanned watermark & flatten background
-                        if flatten_scanned:
-                            bleached_img, bleached_count = PaperSanitizer.bleach_scanned_watermarks(pil_img)
-                            if bleached_count > 0:
-                                pil_img = bleached_img
+                        if is_paper_doc:
+                            # 1. Printer tracking dots
+                            clean_dots_img, dots = PaperSanitizer.remove_printer_tracking_dots(pil_img)
+                            if dots > 0:
+                                pil_img = clean_dots_img
                                 image_modified = True
 
-                        # 3. Chrominance Delta Neutralizer (colored stamps: red/blue/purple)
-                        clean_chroma_img, chroma_count = ChrominanceDeltaSanitizer.neutralize_color_stamps(pil_img)
-                        if chroma_count > 0:
-                            pil_img = clean_chroma_img
+                            # 2. Bleach scanned watermark & flatten background
+                            if flatten_scanned:
+                                bleached_img, bleached_count = PaperSanitizer.bleach_scanned_watermarks(pil_img)
+                                if bleached_count > 0:
+                                    pil_img = bleached_img
+                                    image_modified = True
+
+                            # 3. Chrominance Delta Neutralizer (colored stamps: red/blue/purple)
+                            clean_chroma_img, chroma_count = ChrominanceDeltaSanitizer.neutralize_color_stamps(pil_img)
+                            if chroma_count > 0:
+                                pil_img = clean_chroma_img
+                                image_modified = True
+                                audit["chroma_stamps_neutralized"] = audit.get("chroma_stamps_neutralized", 0) + chroma_count
+
+                        # 4. Zero-Click Automated Watermark Detection & Content-Aware Inpainting
+                        # Removes corner badges, text logos, and stock grids from photos and scans
+                        detected_mask, det_audit = AutoWatermarkDetector.detect_watermark_mask(pil_img)
+                        if np.any(detected_mask > 0):
+                            pil_img = ExemplarPatchInpainter.inpaint(pil_img, detected_mask)
                             image_modified = True
-                            audit["chroma_stamps_neutralized"] = audit.get("chroma_stamps_neutralized", 0) + chroma_count
+                            audit["image_watermarks_inpainted"] = audit.get("image_watermarks_inpainted", 0) + 1
 
                         if image_modified:
                             buf = io.BytesIO()

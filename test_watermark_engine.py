@@ -487,6 +487,43 @@ class TestGhostSanitizer(unittest.TestCase):
         # Corner badge should be cleanly replaced by background (~210)
         self.assertGreater(float(np.mean(clean_arr[205:230, 175:230])), 170.0)
 
+    def test_pdf_embedded_photo_preserves_color_and_inpaints(self):
+        """
+        Verifies that embedded raster photos in PDFs maintain 100% color saturation (no grayscale conversion)
+        and have their watermarks cleanly inpainted during PDF sanitization.
+        """
+        w, h = 200, 200
+        # Vibrant colorful image (warm red/orange photo background)
+        arr = np.full((h, w, 3), [220, 110, 40], dtype=np.uint8)
+        # Add corner badge
+        arr[160:190, 140:190] = [20, 20, 20]
+
+        img_buf = io.BytesIO()
+        Image.fromarray(arr, mode="RGB").save(img_buf, format="JPEG")
+        img_doc = pymupdf.open(stream=img_buf.getvalue(), filetype="jpeg")
+        pdf_bytes = img_doc.convert_to_pdf()
+        img_doc.close()
+
+        clean_pdf_bytes, audit = UniversalSanitizer.sanitize_bytes(pdf_bytes, "photo_doc.pdf")
+        self.assertGreaterEqual(audit.get("images_sanitized", 0), 1)
+
+        doc_clean = pymupdf.open(stream=clean_pdf_bytes, filetype="pdf")
+        img_xref = doc_clean[0].get_images()[0][0]
+        extracted = doc_clean.extract_image(img_xref)
+        clean_img = Image.open(io.BytesIO(extracted["image"]))
+        clean_arr = np.array(clean_img.convert("RGB"), dtype=np.float32)
+
+        # 1. Color must NOT be converted to grayscale
+        r, g, b = clean_arr[:, :, 0], clean_arr[:, :, 1], clean_arr[:, :, 2]
+        max_c = np.maximum(np.maximum(r, g), b)
+        min_c = np.minimum(np.minimum(r, g), b)
+        sat = np.where(max_c > 0, (max_c - min_c) / (max_c + 1e-5), 0.0)
+        self.assertGreater(float(np.mean(sat)), 0.30)
+
+        # 2. Corner badge must be inpainted
+        self.assertGreater(float(np.mean(clean_arr[165:185, 145:185, 0])), 150.0)
+        doc_clean.close()
+
 
 if __name__ == "__main__":
     unittest.main()

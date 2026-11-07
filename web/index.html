@@ -817,11 +817,15 @@
             undoBtn.disabled = !data.can_undo;
             redoBtn.disabled = !data.can_redo;
 
-            pdfPageImage.src = data.image;
-            pdfPageImage.onload = () => {
+            const handleImageLoaded = () => {
                 rebuildInteractiveOverlay();
                 renderSearchHighlights();
             };
+            pdfPageImage.onload = handleImageLoaded;
+            pdfPageImage.src = data.image;
+            if (pdfPageImage.complete) {
+                setTimeout(handleImageLoaded, 30);
+            }
             if (data.is_scanned) {
                 setStatus('📸 Scanned / Photo PDF: AI OCR recognized text into editable boxes! Click any word to edit.', 'success');
             }
@@ -837,9 +841,12 @@
                 return;
             }
 
-            const renderWidth = pdfPageImage.clientWidth;
-            const renderHeight = pdfPageImage.clientHeight;
-            if (!renderWidth || !renderHeight) return;
+            const renderWidth = pdfPageImage.clientWidth || pdfPageImage.naturalWidth || originalPageWidth;
+            const renderHeight = pdfPageImage.clientHeight || pdfPageImage.naturalHeight || originalPageHeight;
+            if (!renderWidth || !renderHeight) {
+                setTimeout(rebuildInteractiveOverlay, 80);
+                return;
+            }
 
             const scaleX = renderWidth / originalPageWidth;
             const scaleY = renderHeight / originalPageHeight;
@@ -2233,13 +2240,14 @@
                         byteNumbers[i] = byteChars.charCodeAt(i);
                     }
                     const byteArray = new Uint8Array(byteNumbers);
-                    const blob = new Blob([byteArray], { type: 'application/pdf' });
+                    const mime = data.mime_type || (data.filename && data.filename.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg');
+                    const blob = new Blob([byteArray], { type: mime });
 
                     const link = document.createElement('a');
                     link.href = URL.createObjectURL(blob);
                     link.download = data.filename || 'edited_clean.pdf';
                     link.click();
-                    setStatus('Clean PDF Downloaded!', 'success');
+                    setStatus((data.is_image ? 'Clean Image' : 'Clean PDF') + ' Downloaded!', 'success');
                 } else {
                     alert('Export failed: ' + data.message);
                 }

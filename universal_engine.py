@@ -117,11 +117,6 @@ def resolve_font(font_name: str, flags: int = 0, is_bold: bool = None, is_italic
 
     # B. Serif family (Times New Roman, TeXGyreTermes, NimbusRoman, Georgia, Cambria, Garamond, Palatino)
     if any(k in clean for k in SERIF_KEYWORDS) or bool(flags & 4):
-        times_file = "timesbd.ttf" if is_bold else ("timesi.ttf" if is_italic else "times.ttf")
-        times_path = os.path.join(WIN_FONTS, times_file)
-        if os.path.exists(times_path):
-            return {"file": times_path, "name": "TimesNewRoman", "family": "serif", "is_base14": False}
-
         # Base 14 standard Type 1 Times (matches TeXGyreTermes, NimbusRoman, Times New Roman 1:1 without TrueType bloat)
         if is_bold and is_italic:
             return {"name": "times-bolditalic", "family": "serif", "is_base14": True}

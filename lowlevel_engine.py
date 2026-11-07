@@ -488,13 +488,21 @@ def apply_lowlevel_edit(doc: pymupdf.Document, page: pymupdf.Page, edit: dict) -
                     break
 
             orig_font_title = orig_font_info[3] if orig_font_info else edit.get("font", "helv")
+
+            # GUARD: In subset or CID/Type0 fonts, stream operands are custom glyph IDs, NOT ASCII bytes.
+            # Patching ASCII bytes into a subset font stream causes character corruption (# " \x0c $ % & $) and missing glyph boxes [].
+            # When editing text under a subset font, fail-closed to universal_engine which embeds full fonts and proper CMaps.
+            is_subset_font = bool(re.match(r'^[A-Z0-9]{6}\+', orig_font_title))
+            is_cid_font = orig_font_info and (orig_font_info[2] in ('Type0', 'CIDFont') or 'Identity' in str(orig_font_info[5]))
+            if is_subset_font or is_cid_font:
+                return False
             orig_is_bold = bool(re.search(r'[\-_ ]*(bold|heavy|black)', orig_font_title.lower())) or orig_font_title.lower().endswith('bd')
 
             is_bold = edit.get("is_bold")
             if is_bold is None and "flags" in edit:
                 is_bold = bool(int(edit["flags"]) & 16)
 
-            custom_bold = edit.get("custom_bold", False) or (is_bold is not None and is_bold != orig_is_bold)
+            custom_bold = edit.get("custom_bold", False) or (is_bold is True and not orig_is_bold)
             custom_font = edit.get("custom_font", False)
             custom_size = edit.get("custom_size", False) or (edit.get("size") is not None and abs(float(edit["size"]) - orig_size) > 0.5)
 
