@@ -93,9 +93,24 @@ def extract_ocr_text_data(page: pymupdf.Page):
             line_height = max(8.0, by1 - by0)
             est_size = round(line_height * 0.75, 1)
 
+# Compute true dark ink color using darkest 10th percentile in the bounding box
             try:
-                sample_p = pix.pixel(int(bx0 / scale_x + 2), int((by0 + by1) / (2 * scale_y)))
-                col = f"#{sample_p[0]:02x}{sample_p[1]:02x}{sample_p[2]:02x}"
+                px0 = max(0, int(bx0 / scale_x))
+                py0 = max(0, int(by0 / scale_y))
+                px1 = min(img_np.shape[1], int(bx1 / scale_x))
+                py1 = min(img_np.shape[0], int(by1 / scale_y))
+                if px1 > px0 and py1 > py0:
+                    box_rgb = img_np[py0:py1, px0:px1, :3]
+                    lum = 0.299 * box_rgb[:, :, 0] + 0.587 * box_rgb[:, :, 1] + 0.114 * box_rgb[:, :, 2]
+                    p10 = np.percentile(lum, 10)
+                    ink = box_rgb[lum <= p10].mean(axis=0)
+                    r, g, b = int(ink[0]), int(ink[1]), int(ink[2])
+                    if 0.299 * r + 0.587 * g + 0.114 * b > 140:
+                        col = "#1E293B"
+                    else:
+                        col = f"#{r:02x}{g:02x}{b:02x}"
+                else:
+                    col = "#1E293B"
             except Exception:
                 col = "#1E293B"
 

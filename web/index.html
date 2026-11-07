@@ -1225,7 +1225,12 @@
             editorCardTitle.innerText = `Edit ${activeGranularity === 'word' ? 'Word' : activeGranularity === 'line' ? 'Line' : 'Text Box'}`;
             editorTextInput.value = item.text;
             fontSizeVal.innerText = `${activeEditorTarget.size.toFixed(1)}pt`;
-            editorColorInput.value = (activeEditorTarget.color && activeEditorTarget.color.length === 7) ? activeEditorTarget.color : '#000000';
+            let colVal = (activeEditorTarget.color && activeEditorTarget.color.length === 7) ? activeEditorTarget.color : '#000000';
+            if (colVal.toLowerCase() === '#ffffff' || colVal.toLowerCase().startsWith('#f') || colVal.toLowerCase() === '#edf8f8') {
+                colVal = '#1E293B';
+                activeEditorTarget.color = '#1E293B';
+            }
+            editorColorInput.value = colVal;
             editorReflowToggle.checked = true;
             updateFontFamilySelect(activeEditorTarget.font);
             updateStyleButtons();

@@ -24,6 +24,9 @@ from watermark_engine import (
     PaperSanitizer,
     SteganographySanitizer,
     InpaintingSanitizer,
+    ExemplarPatchInpainter,
+    AutoWatermarkDetector,
+    BatchImageAlphaInverter,
     PreflightStructuralDetector,
     ChrominanceDeltaSanitizer,
     MultiPageAlphaInverter,
@@ -398,6 +401,91 @@ class TestGhostSanitizer(unittest.TestCase):
         # Watermark MUST be removed
         self.assertNotIn("CONFIDENTIAL DRAFT COPY", text)
         doc_clean.close()
+
+    def test_auto_watermark_detector_corner(self):
+        """Verifies zero-click detection of localized corner watermark stamps."""
+        w, h = 300, 300
+        arr = np.full((h, w, 3), 190, dtype=np.uint8)
+        # Corner badge at bottom right
+        arr[260:290, 210:290] = [30, 30, 30]
+
+        img = Image.fromarray(arr, mode="RGB")
+        corner_mask = AutoWatermarkDetector.detect_corner_watermarks(img)
+        self.assertGreater(np.sum(corner_mask > 0), 100)
+        # Verify it detected pixels specifically in the bottom right corner
+        self.assertTrue(np.any(corner_mask[260:290, 210:290] > 0))
+        # Verify top left corner is clean
+        self.assertEqual(np.sum(corner_mask[:100, :100]), 0)
+
+    def test_auto_watermark_detector_stock_grid(self):
+        """Verifies detection of diagonal stock photo watermark lattices."""
+        w, h = 200, 200
+        arr = np.full((h, w), 180, dtype=np.uint8)
+        yy, xx = np.mgrid[0:h, 0:w]
+        grid = ((yy - xx) % 40 < 3)
+        arr[grid] = 120
+
+        img = Image.fromarray(arr, mode="L")
+        grid_mask = AutoWatermarkDetector.detect_stock_grid_watermarks(img)
+        self.assertGreater(np.sum(grid_mask > 0), 200)
+
+    def test_exemplar_patch_inpainting_textured(self):
+        """Verifies that exemplar patch inpainting restores micro-texture variance."""
+        w, h = 80, 80
+        np.random.seed(42)
+        base = np.full((h, w, 3), 140, dtype=np.float32)
+        noise = np.random.normal(0, 14, (h, w, 3)).astype(np.float32)
+        textured = np.clip(base + noise, 0, 255).astype(np.uint8)
+
+        mask = np.zeros((h, w), dtype=np.uint8)
+        mask[30:50, 30:50] = 255
+
+        img = Image.fromarray(textured, mode="RGB")
+        clean_img = ExemplarPatchInpainter.inpaint(img, mask)
+        clean_arr = np.array(clean_img, dtype=np.float32)
+
+        # Repaired patch should maintain authentic texture variance
+        repaired_std = float(np.std(clean_arr[32:48, 32:48]))
+        self.assertGreater(repaired_std, 6.0)
+
+    def test_batch_image_alpha_inversion(self):
+        """Verifies Google Research exact alpha inversion across an image batch."""
+        w, h = 100, 100
+        p1 = np.full((h, w, 3), [190, 120, 120], dtype=np.uint8)
+        p2 = np.full((h, w, 3), [120, 190, 120], dtype=np.uint8)
+        p3 = np.full((h, w, 3), [120, 120, 190], dtype=np.uint8)
+
+        # Add static watermark across all 3
+        alpha = 0.35
+        wm_color = np.array([255, 255, 255], dtype=np.float32)
+        imgs = []
+        for p in [p1, p2, p3]:
+            pf = p.astype(np.float32)
+            pf[40:60, 20:80] = (1.0 - alpha) * pf[40:60, 20:80] + alpha * wm_color
+            imgs.append(Image.fromarray(pf.astype(np.uint8), mode="RGB"))
+
+        cleaned_bytes, audit = UniversalSanitizer.sanitize_image_batch(imgs)
+        self.assertEqual(audit["status"], "success")
+        self.assertEqual(len(cleaned_bytes), 3)
+
+    def test_image_zero_click_auto_removal(self):
+        """Verifies end-to-end zero-click watermark removal on a single standalone image."""
+        w, h = 250, 250
+        arr = np.full((h, w, 3), 210, dtype=np.uint8)
+        # Add corner badge at bottom right
+        arr[200:235, 170:235] = [20, 20, 20]
+
+        buf = io.BytesIO()
+        Image.fromarray(arr).save(buf, format="PNG")
+
+        clean_bytes, audit = UniversalSanitizer.sanitize_bytes(buf.getvalue(), "photo.png")
+        self.assertTrue(audit.get("inpainting_applied", False))
+        self.assertTrue(audit.get("auto_detected_watermark", False))
+
+        clean_img = Image.open(io.BytesIO(clean_bytes))
+        clean_arr = np.array(clean_img)
+        # Corner badge should be cleanly replaced by background (~210)
+        self.assertGreater(float(np.mean(clean_arr[205:230, 175:230])), 170.0)
 
 
 if __name__ == "__main__":

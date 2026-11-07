@@ -515,6 +515,7 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
             if has_new_pos:
                 first_line_baseline = (float(edit["new_y"]) + (size * 0.85)) if len(formatted_lines) > 1 else true_baseline_y
 
+            parsed_color = ensure_contrast(parsed_color, bg_color)
             for i, line_text in enumerate(formatted_lines):
                 if not line_text:
                     continue
@@ -589,6 +590,7 @@ def apply_universal_edit(doc: pymupdf.Document, edit: dict):
             page.insert_font(fontname=font_kwargs["fontname"], fontbuffer=measure_font.buffer)
 
         # 8. Insert New Text Strictly on Single Baseline
+        parsed_color = ensure_contrast(parsed_color, bg_color)
         insert_pt = pymupdf.Point(insert_x, true_baseline_y)
         page.insert_text(
             insert_pt,
