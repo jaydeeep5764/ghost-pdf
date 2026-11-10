@@ -16,6 +16,29 @@ import base64
 
 FONTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 WIN_FONTS = r"C:\Windows\Fonts"
+SYSTEM_FONT_DIRS = [
+    FONTS_DIR,
+    WIN_FONTS,
+    "/usr/share/fonts/truetype/liberation2",
+    "/usr/share/fonts/truetype/liberation",
+    "/usr/share/fonts/truetype/crosextra",
+    "/usr/share/fonts/truetype/dejavu",
+    "/usr/share/fonts/truetype/dancingscript",
+    "/usr/share/fonts/truetype/humor-sans",
+    "/usr/share/fonts/truetype",
+]
+
+
+def find_font_file(*candidates: str):
+    """Return the first existing font path across bundled, Windows, and Linux system font directories."""
+    for name in candidates:
+        if os.path.isabs(name) and os.path.exists(name):
+            return name
+        for base in SYSTEM_FONT_DIRS:
+            path = os.path.join(base, name)
+            if os.path.exists(path):
+                return path
+    return None
 
 SERIF_KEYWORDS = [
     "termes", "texgyre", "times", "roman", "georgia", "garamond",
@@ -98,15 +121,15 @@ def resolve_font(font_name: str, flags: int = 0, is_bold: bool = None, is_italic
         # Check DejaVu first (we have high-fidelity TTFs in pdf_engine/fonts)
         if "dejavu" in clean:
             font_filename = "DejaVuSansMono-Bold.ttf" if is_bold else "DejaVuSansMono.ttf"
-            font_path = os.path.join(FONTS_DIR, font_filename)
-            if os.path.exists(font_path):
+            font_path = find_font_file(font_filename)
+            if font_path:
                 return {"file": font_path, "name": "DejaVuSansMono-Bold" if is_bold else "DejaVuSansMono", "family": "mono", "is_base14": False}
-        
-        # Check Consolas in Windows Fonts if explicit consolas
+
+        # Check Consolas (Windows) or bundled DejaVu Sans Mono (cross-platform)
         if "consola" in clean:
-            consola_file = os.path.join(WIN_FONTS, "consolab.ttf" if is_bold else "consola.ttf")
-            if os.path.exists(consola_file):
-                return {"file": consola_file, "name": "Consolas-Bold" if is_bold else "Consolas", "family": "mono", "is_base14": False}
+            font_path = find_font_file("consolab.ttf" if is_bold else "consola.ttf")
+            if font_path:
+                return {"file": font_path, "name": "Consolas-Bold" if is_bold else "Consolas", "family": "mono", "is_base14": False}
 
         # Otherwise standard Base 14 Courier (guaranteed 100% glyph support, no distortion)
         if is_bold and is_italic:
@@ -121,9 +144,10 @@ def resolve_font(font_name: str, flags: int = 0, is_bold: bool = None, is_italic
     if any(k in clean for k in SERIF_KEYWORDS) or bool(flags & 4):
         # If text contains math symbols or unicode outside Latin-1, use TrueType font with full unicode CMap
         if has_non_latin:
-            times_ttf = "timesbd.ttf" if is_bold else ("timesi.ttf" if is_italic else "times.ttf")
-            t_path = os.path.join(WIN_FONTS, times_ttf)
-            if os.path.exists(t_path):
+            win_serif = "timesbd.ttf" if is_bold else ("timesi.ttf" if is_italic else "times.ttf")
+            lin_serif = "LiberationSerif-Bold.ttf" if is_bold else ("LiberationSerif-Italic.ttf" if is_italic else "LiberationSerif-Regular.ttf")
+            t_path = find_font_file(win_serif, lin_serif, "DejaVuSerif.ttf")
+            if t_path:
                 return {"file": t_path, "name": "TimesNewRoman-Bold" if is_bold else "TimesNewRoman", "family": "serif", "is_base14": False}
 
         # Base 14 standard Type 1 Times (matches TeXGyreTermes, NimbusRoman, Times New Roman 1:1 without TrueType bloat)
@@ -137,57 +161,54 @@ def resolve_font(font_name: str, flags: int = 0, is_bold: bool = None, is_italic
 
     # C. Sans-serif family (Helvetica, Arial, Calibri, Liberation Sans, Segoe UI)
     if has_non_latin:
-        arial_file = "arialbd.ttf" if is_bold else ("ariali.ttf" if is_italic else "arial.ttf")
-        arial_path = os.path.join(WIN_FONTS, arial_file)
-        if os.path.exists(arial_path):
-            return {"file": arial_path, "name": "Arial", "family": "sans", "is_base14": False}
-        segoe_file = "segoeuib.ttf" if is_bold else ("segoeuii.ttf" if is_italic else "segoeui.ttf")
-        segoe_path = os.path.join(WIN_FONTS, segoe_file)
-        if os.path.exists(segoe_path):
-            return {"file": segoe_path, "name": "SegoeUI", "family": "sans", "is_base14": False}
+        win_sans = "arialbd.ttf" if is_bold else ("ariali.ttf" if is_italic else "arial.ttf")
+        lin_sans = "LiberationSans-Bold.ttf" if is_bold else ("LiberationSans-Italic.ttf" if is_italic else "LiberationSans-Regular.ttf")
+        dejavu_sans = "DejaVuSans-Bold.ttf" if is_bold else "DejaVuSans.ttf"
+        sans_path = find_font_file(win_sans, lin_sans, dejavu_sans, "segoeuib.ttf" if is_bold else "segoeui.ttf")
+        if sans_path:
+            return {"file": sans_path, "name": "Arial", "family": "sans", "is_base14": False}
     if "arial" in clean:
-        arial_file = "arialbd.ttf" if is_bold else ("ariali.ttf" if is_italic else "arial.ttf")
-        arial_path = os.path.join(WIN_FONTS, arial_file)
-        if os.path.exists(arial_path):
+        win_arial = "arialbd.ttf" if is_bold else ("ariali.ttf" if is_italic else "arial.ttf")
+        lin_arial = "LiberationSans-Bold.ttf" if is_bold else ("LiberationSans-Italic.ttf" if is_italic else "LiberationSans-Regular.ttf")
+        arial_path = find_font_file(win_arial, lin_arial)
+        if arial_path:
             return {"file": arial_path, "name": "Arial", "family": "sans", "is_base14": False}
 
     if "calibri" in clean:
-        calibri_file = "calibrib.ttf" if is_bold else ("calibrii.ttf" if is_italic else "calibri.ttf")
-        calibri_path = os.path.join(WIN_FONTS, calibri_file)
-        if os.path.exists(calibri_path):
+        win_cal = "calibrib.ttf" if is_bold else ("calibrii.ttf" if is_italic else "calibri.ttf")
+        lin_cal = "Carlito-Bold.ttf" if is_bold else ("Carlito-Italic.ttf" if is_italic else "Carlito-Regular.ttf")
+        calibri_path = find_font_file(win_cal, lin_cal)
+        if calibri_path:
             return {"file": calibri_path, "name": "Calibri", "family": "sans", "is_base14": False}
 
-    # D. Handwriting & Script family (Segoe Script, Ink Free, Segoe Print, Lucida Handwriting)
+    # D. Handwriting & Script family (Segoe Script, Ink Free, Segoe Print, Lucida Handwriting + Linux fallbacks)
     if any(k in clean for k in ["hand", "script", "ink", "pen", "cursive", "segoesc", "segoepr", "lhandw"]):
         if any(k in clean for k in ["script", "cursive", "segoesc"]):
-            f_file = "segoescb.ttf" if is_bold else "segoesc.ttf"
-            f_path = os.path.join(WIN_FONTS, f_file)
-            if os.path.exists(f_path):
+            f_path = find_font_file("segoescb.ttf" if is_bold else "segoesc.ttf", "DancingScript-Bold.ttf" if is_bold else "DancingScript-Regular.ttf")
+            if f_path:
                 return {"file": f_path, "name": "SegoeScript-Bold" if is_bold else "SegoeScript", "family": "handwriting", "is_base14": False}
         if any(k in clean for k in ["ink", "pen", "inkfree", "casual"]):
-            f_path = os.path.join(WIN_FONTS, "Inkfree.ttf")
-            if os.path.exists(f_path):
+            f_path = find_font_file("Inkfree.ttf", "Humor-Sans.ttf", "DejaVuSans-Oblique.ttf")
+            if f_path:
                 return {"file": f_path, "name": "InkFree", "family": "handwriting", "is_base14": False}
         if any(k in clean for k in ["print", "segoepr", "neat"]):
-            f_file = "segoeprb.ttf" if is_bold else "segoepr.ttf"
-            f_path = os.path.join(WIN_FONTS, f_file)
-            if os.path.exists(f_path):
+            f_path = find_font_file("segoeprb.ttf" if is_bold else "segoepr.ttf", "Humor-Sans.ttf", "DejaVuSans.ttf")
+            if f_path:
                 return {"file": f_path, "name": "SegoePrint-Bold" if is_bold else "SegoePrint", "family": "handwriting", "is_base14": False}
-        for cand in ["segoesc.ttf", "Inkfree.ttf", "LHANDW.TTF"]:
-            f_path = os.path.join(WIN_FONTS, cand)
-            if os.path.exists(f_path):
-                return {"file": f_path, "name": "Handwriting", "family": "handwriting", "is_base14": False}
+        f_path = find_font_file("segoesc.ttf", "Inkfree.ttf", "LHANDW.TTF", "DancingScript-Regular.ttf", "Humor-Sans.ttf")
+        if f_path:
+            return {"file": f_path, "name": "Handwriting", "family": "handwriting", "is_base14": False}
+        # Last-resort Base14 italic fallback when no TTF is installed
+        return {"name": "times-bolditalic" if is_bold else "times-italic", "family": "handwriting", "is_base14": True}
 
     if "segoe" in clean:
-        segoe_file = "segoeuib.ttf" if is_bold else ("segoeuii.ttf" if is_italic else "segoeui.ttf")
-        segoe_path = os.path.join(WIN_FONTS, segoe_file)
-        if os.path.exists(segoe_path):
+        segoe_path = find_font_file("segoeuib.ttf" if is_bold else ("segoeuii.ttf" if is_italic else "segoeui.ttf"))
+        if segoe_path:
             return {"file": segoe_path, "name": "SegoeUI", "family": "sans", "is_base14": False}
 
     if "georgia" in clean:
-        georgia_file = "georgiab.ttf" if is_bold else ("georgiai.ttf" if is_italic else "georgia.ttf")
-        georgia_path = os.path.join(WIN_FONTS, georgia_file)
-        if os.path.exists(georgia_path):
+        georgia_path = find_font_file("georgiab.ttf" if is_bold else ("georgiai.ttf" if is_italic else "georgia.ttf"))
+        if georgia_path:
             return {"file": georgia_path, "name": "Georgia", "family": "serif", "is_base14": False}
 
     # Standard Base 14 Helvetica (Type 1 standard, clean slim stems, zero artificial bolding)

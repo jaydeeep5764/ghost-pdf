@@ -1,38 +1,43 @@
-# Ghost PDF (Pixel-Perfect In-Place PDF Editor)
+---
+title: Ghost PDF Studio
+emoji: 👻
+colorFrom: blue
+colorTo: purple
+sdk: docker
+app_port: 7860
+pinned: false
+---
 
-> 🔒 **Ghost Mode:** 100% In-Memory Local Processing | Zero Watermarks | Pixel-Perfect Typography & Stream Editing
+# Ghost PDF (Pixel-Perfect In-Place PDF Editor & Watermark Remover)
 
-**Ghost PDF** is a high-fidelity, local-first PDF modification engine designed to perform seamless text replacements while preserving original document layout, typography archetypes, background colors, and font metrics.
+> 🔒 **Ghost Mode:** 100% In-Memory Processing | 2-in-1 Studio (Watermark Remover + PDF Text Editor) | Pixel-Perfect Typography & Stream Editing
+
+**Ghost PDF** is a high-fidelity, dual-mode PDF modification engine combining a **Universal Watermark / Sanitizer** and a **Pixel-Perfect PDF Text & Handwriting Editor** in one web workspace.
 
 ---
 
 ## 🌟 Key Features
 
+- **2-in-1 Dual Mode Studio (`web/index.html` + `web/server.py`):**
+  - **Mode 1 — Watermark Remover & Sanitizer:** Strips transparent Form XObject stamps, SMask overlays, diagonal watermarks, vector Bézier paths, laser printer tracking dots (MIC), and steganography across PDF, DOCX, PPTX, XLSX, and images.
+  - **Mode 2 — PDF Text Editor:** Click any word, line, or text block to edit in-place, resize, recolor, move, search/replace, or insert new text.
 - **Digital Vector & Scanned Photo PDF Editing:**
   - **Native Digital PDFs:** Edits content streams in-place with zero quality loss and no artificial rasterization.
   - **Scanned Documents & Exam Papers:** Neural AI OCR detects words, lines, and bounding boxes on scanned/photo PDFs for full point-and-click editing.
-  - **Asynchronous Pre-OCR & Zero-Copy Buffers:** Fast page loading with background pre-processing across multi-page documents.
+  - **Per-Tab Isolated Sessions:** Safe multi-user session isolation (`X-Session-Id`) with independent undo/redo history and page OCR caches.
 - **Advanced Typography & Weight Matching:**
-  - Sans-Serif (Arial, Helvetica, Trebuchet, Segoe UI)
-  - Authentic Serif (Times New Roman, Georgia, Garamond, Palatino, Minion)
-  - Clean Sans (Calibri)
-  - Monospace (Consolas, DejaVu Sans Mono, Courier)
+  - Cross-platform font mapping for Sans-Serif (Arial / Liberation Sans / Helvetica), Serif (Times New Roman / Liberation Serif), Calibri (Carlito), and Monospace (DejaVu Sans Mono / Courier).
   - Accurate stroke thickness analysis for bold weights and calibrated font sizing.
 - **✍️ Handwriting & Script Engine:**
-  - **Cursive Script:** Flowing connected loops (*Segoe Script*, *Lucida Handwriting*)
+  - **Cursive Script:** Flowing connected loops (*Segoe Script*, *Dancing Script*, *Lucida Handwriting*)
   - **Casual Ballpoint:** Natural handwritten strokes (*Ink Free*)
   - **Neat Hand Print:** Separated hand-drawn letters (*Segoe Print*)
-  - **Ruled-Paper Inpainting:** OpenCV Navier-Stokes inpainting erases handwritten ink without cutting notebook horizontal ruling lines or grid margins.
-  - **Dynamic Ink Tone Sampling:** Samples real pen ink colors (ballpoint blue, fountain black, red marking, pencil graphite).
-- **Background Color & Line-Aware Inpainting:** Automatically inspects bounding box neighborhoods to seamlessly redact and patch backgrounds without leaving white halo artifacts.
-- **Zero Watermarks & 100% Privacy:** Runs entirely on your local machine with zero external API calls or third-party tracking.
-- **Interactive Web Canvas:** Visual point-and-click browser editor (`web/server.py` on `http://localhost:3000`).
 
 ---
 
 ## 🚀 Quick Start
 
-### 1. Installation
+### 1. Local Installation
 
 Ensure you have Python 3.9+ installed, then install the dependencies:
 
@@ -40,9 +45,7 @@ Ensure you have Python 3.9+ installed, then install the dependencies:
 pip install -r requirements.txt
 ```
 
-### 2. Launch the Web Interface
-
-For an interactive browser UI where you can click any text span and edit it live:
+### 2. Launch the Web Interface Locally
 
 ```bash
 python web/server.py
@@ -51,7 +54,15 @@ Then open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ---
 
-### 3. Universal Watermark & Steganography Remover (CLI)
+### 3. Deploy 24/7 on Hugging Face Spaces (Docker)
+
+1. Create a new Space on [huggingface.co/new-space](https://huggingface.co/new-space) and select **Docker** as the SDK.
+2. Push this repository (with `Dockerfile`, `requirements.txt`, and the YAML header in `README.md`) to your Space's Git remote (or mirror from GitHub).
+3. Hugging Face Spaces builds the container automatically on port `7860` with both **Watermark Remover** and **PDF Editor** modes live 24/7.
+
+---
+
+### 4. Universal Watermark & Steganography Remover (CLI)
 
 Sanitize any PDF or scanned image (removes text watermarks, publisher banners, laser printer tracking dots, and invisible steganography):
 
@@ -72,17 +83,19 @@ python watermark_engine.py paper.pdf -o paper_clean.pdf --keywords "MyWatermark"
 
 ```
 ghost-pdf/
-├── universal_engine.py      # Core typography, handwriting font resolution & stream replacement
+├── Dockerfile               # Hugging Face Spaces / Docker container image (port 7860)
+├── .dockerignore            # Keeps test scratch artifacts out of container builds
+├── universal_engine.py      # Core typography, Linux/Windows font resolution & stream replacement
 ├── watermark_engine.py      # Universal Watermark, MIC Tracking Dot & Steganography Sanitizer
-├── smart_typography.py     # Font metric resolver & background color sampling
-├── font_resolver.py        # System font locator and fallback matching
-├── lowlevel_editor.py      # Low-level PDF stream operator rewiring
-├── app.py                  # Streamlit application (Dual Mode: Editor + Universal Sanitizer)
+├── smart_typography.py      # Font metric resolver & background color sampling
+├── font_resolver.py         # System font locator and fallback matching
+├── lowlevel_editor.py       # Low-level PDF stream operator rewiring
+├── app.py                   # Streamlit application (Dual Mode: Editor + Universal Sanitizer)
 ├── web/
-│   ├── index.html          # Interactive HTML5/Canvas UI with handwriting styles & live controls
-│   └── server.py           # High-performance HTTP server backend with neural OCR caching
-├── sample_invoice.pdf      # Sample document for verification & testing
-├── requirements.txt        # Python package dependencies
+│   ├── index.html           # 2-in-1 UI (Watermark Remover + PDF Editor) with per-tab session IDs
+│   └── server.py            # Multi-session HTTP server backend with neural OCR caching
+├── sample_invoice.pdf       # Sample document for verification & testing
+├── requirements.txt         # Full Python package dependencies
 └── README.md
 ```
 

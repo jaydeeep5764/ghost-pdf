@@ -787,6 +787,33 @@
 
         lucide.createIcons();
 
+        // Per-tab isolated session ID so concurrent cloud users never overwrite each other's documents
+        const GHOST_SESSION_ID = (() => {
+            try {
+                let sid = sessionStorage.getItem('ghost_pdf_sid');
+                if (!sid) {
+                    sid = (crypto.randomUUID ? crypto.randomUUID() : ('sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10)));
+                    sessionStorage.setItem('ghost_pdf_sid', sid);
+                }
+                return sid;
+            } catch (_) {
+                return ('sess_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10));
+            }
+        })();
+
+        const _origFetch = window.fetch.bind(window);
+        window.fetch = function(input, init = {}) {
+            const urlStr = typeof input === 'string' ? input : (input && input.url) || '';
+            if (urlStr.startsWith('/api/')) {
+                const headers = new Headers(init.headers || {});
+                if (!headers.has('X-Session-Id')) {
+                    headers.set('X-Session-Id', GHOST_SESSION_ID);
+                }
+                return _origFetch(input, Object.assign({}, init, { headers }));
+            }
+            return _origFetch(input, init);
+        };
+
         // -------------------------------------------------------------
         // Data Loading & Rendering
         // -------------------------------------------------------------

@@ -1,4 +1,5 @@
 import threading
+import time
 import http.server
 import socketserver
 import json
@@ -9,6 +10,11 @@ import sys
 import urllib.parse
 import re
 import pymupdf
+
+try:
+    import cv2
+except ImportError:
+    cv2 = None
 
 # Reconfigure stdout/stderr for clean UTF-8 on Windows
 if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
@@ -23,26 +29,69 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from universal_engine import apply_universal_edit
 from watermark_engine import UniversalSanitizer, PDFWatermarkSanitizer
 
-PORT = 3000
+PORT = int(os.environ.get("PORT", 7860 if os.environ.get("SPACE_ID") else 3000))
 WEB_DIR = os.path.dirname(os.path.abspath(__file__))
 
-ACTIVE_PDF_BYTES = None
-ACTIVE_ORIGINAL_FILENAME = "document.pdf"
-ACTIVE_IS_IMAGE = False
-HISTORY = []
-HISTORY_INDEX = -1
 MAX_HISTORY = 40
-PAGE_OCR_CACHE = {}
+MAX_SESSIONS = 25
+SESSION_TTL_SEC = 3600
 
+SAMPLE_PDF_BYTES = None
 try:
     sample_path = os.path.join(os.path.dirname(WEB_DIR), "sample_invoice.pdf")
     if os.path.exists(sample_path):
         with open(sample_path, "rb") as f:
-            ACTIVE_PDF_BYTES = f.read()
-            HISTORY = [ACTIVE_PDF_BYTES]
-            HISTORY_INDEX = 0
+            SAMPLE_PDF_BYTES = f.read()
 except Exception as e:
     print(f"Sample load warning: {e}")
+
+SESSION_LOCK = threading.RLock()
+SESSIONS = {}
+PAGE_OCR_CACHE = {}  # Fallback cache when extract_ocr_text_data is called without a session
+
+
+def _new_session():
+    return {
+        "pdf_bytes": SAMPLE_PDF_BYTES,
+        "original_filename": "document.pdf",
+        "is_image": False,
+        "history": [SAMPLE_PDF_BYTES] if SAMPLE_PDF_BYTES is not None else [],
+        "history_index": 0 if SAMPLE_PDF_BYTES is not None else -1,
+        "ocr_cache": {},
+        "last_access": time.time(),
+    }
+
+
+def get_session(session_id: str = "default"):
+    """Return an isolated per-browser session, evicting stale sessions to bound RAM."""
+    sid = (session_id or "default").strip()[:64] or "default"
+    now = time.time()
+    with SESSION_LOCK:
+        expired = [k for k, v in SESSIONS.items() if k != sid and (now - v["last_access"]) > SESSION_TTL_SEC]
+        for k in expired:
+            del SESSIONS[k]
+        while len(SESSIONS) >= MAX_SESSIONS and sid not in SESSIONS:
+            oldest_k = min(SESSIONS.keys(), key=lambda k: SESSIONS[k]["last_access"])
+            if oldest_k == sid:
+                break
+            del SESSIONS[oldest_k]
+        if sid not in SESSIONS:
+            SESSIONS[sid] = _new_session()
+        SESSIONS[sid]["last_access"] = now
+        return SESSIONS[sid]
+
+
+def push_history(sess: dict, pdf_bytes: bytes):
+    """Commit updated PDF bytes to session undo/redo history."""
+    with SESSION_LOCK:
+        sess["pdf_bytes"] = pdf_bytes
+        hist = sess["history"][:sess["history_index"] + 1]
+        hist.append(pdf_bytes)
+        if len(hist) > MAX_HISTORY:
+            hist.pop(0)
+        sess["history"] = hist
+        sess["history_index"] = len(hist) - 1
+
 
 OCR_ENGINE = None
 
@@ -60,15 +109,15 @@ def get_ocr_engine():
 # Asynchronously pre-warm ONNX neural models in the background so initial uploads have zero initialization lag
 threading.Thread(target=get_ocr_engine, daemon=True).start()
 
-def extract_ocr_text_data(page: pymupdf.Page, page_idx: int = 0):
+def extract_ocr_text_data(page: pymupdf.Page, page_idx: int = 0, ocr_cache: dict = None):
     """
     Runs high-performance OCR on scanned / photo-converted PDF pages
     to detect lines, words, and exact bounding boxes for full interactive editing.
     Caches results per page so subsequent edits are instantaneous (<15ms).
     """
-    global PAGE_OCR_CACHE
-    if page_idx in PAGE_OCR_CACHE:
-        cached_w, cached_l, cached_b = PAGE_OCR_CACHE[page_idx]
+    cache = PAGE_OCR_CACHE if ocr_cache is None else ocr_cache
+    if page_idx in cache:
+        cached_w, cached_l, cached_b = cache[page_idx]
         return [dict(w) for w in cached_w], [dict(l) for l in cached_l], [dict(b) for b in cached_b]
 
     engine = get_ocr_engine()
@@ -141,15 +190,16 @@ def extract_ocr_text_data(page: pymupdf.Page, page_idx: int = 0):
                         col = f"#{r:02x}{g:02x}{b:02x}"
 
                     # Stroke width & ink density analysis for bold weight detection
-                    crop_gray = cv2.cvtColor(box_rgb, cv2.COLOR_RGB2GRAY)
-                    _, line_th = cv2.threshold(crop_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-                    dist = cv2.distanceTransform(line_th, cv2.DIST_L2, 3)
-                    strokes = dist[dist > 1.0]
-                    if len(strokes) > 0:
-                        stroke_thick = np.percentile(strokes, 80) * 2
-                        h_px = py1 - py0
-                        if (stroke_thick / max(1.0, h_px)) >= 0.13:
-                            is_stroke_bold = True
+                    if cv2 is not None:
+                        crop_gray = cv2.cvtColor(box_rgb, cv2.COLOR_RGB2GRAY)
+                        _, line_th = cv2.threshold(crop_gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                        dist = cv2.distanceTransform(line_th, cv2.DIST_L2, 3)
+                        strokes = dist[dist > 1.0]
+                        if len(strokes) > 0:
+                            stroke_thick = np.percentile(strokes, 80) * 2
+                            h_px = py1 - py0
+                            if (stroke_thick / max(1.0, h_px)) >= 0.13:
+                                is_stroke_bold = True
             except Exception:
                 pass
 
@@ -210,13 +260,13 @@ def extract_ocr_text_data(page: pymupdf.Page, page_idx: int = 0):
                     w_id += 1
                     curr_x += tok_w + (total_w / total_chars)
 
-        PAGE_OCR_CACHE[page_idx] = (words, lines, blocks)
+        cache[page_idx] = (words, lines, blocks)
         return words, lines, blocks
     except Exception as e:
         print(f"Error during OCR extraction: {e}")
         return [], [], []
 
-def get_page_payload(pdf_bytes, page_idx=0):
+def get_page_payload(pdf_bytes, page_idx=0, ocr_cache: dict = None, can_undo: bool = False, can_redo: bool = False):
     doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
     total_pages = len(doc)
     if page_idx < 0 or page_idx >= total_pages:
@@ -355,7 +405,7 @@ def get_page_payload(pdf_bytes, page_idx=0):
 
     is_scanned = (len(words) == 0) or has_full_bg_image
     if is_scanned:
-        ocr_w, ocr_l, ocr_b = extract_ocr_text_data(page, page_idx)
+        ocr_w, ocr_l, ocr_b = extract_ocr_text_data(page, page_idx, ocr_cache=ocr_cache)
         if ocr_w:
             if len(words) == 0:
                 words = ocr_w
@@ -435,9 +485,6 @@ def get_page_payload(pdf_bytes, page_idx=0):
 
     doc.close()
 
-    can_undo = (HISTORY_INDEX > 0)
-    can_redo = (HISTORY_INDEX < len(HISTORY) - 1)
-
     return {
         "page_index": page_idx,
         "total_pages": total_pages,
@@ -454,11 +501,79 @@ def get_page_payload(pdf_bytes, page_idx=0):
         "is_scanned": is_scanned
     }
 
+
+def render_session_page(sess: dict, page_idx: int = 0):
+    """Render page payload using the session's active document, OCR cache, and undo state."""
+    return get_page_payload(
+        sess["pdf_bytes"],
+        page_idx,
+        ocr_cache=sess["ocr_cache"],
+        can_undo=(sess["history_index"] > 0),
+        can_redo=(sess["history_index"] < len(sess["history"]) - 1),
+    )
+
+
+def _build_export_payload(sess: dict, compress: bool = False):
+    """Build export JSON payload for either PDF or edited composite image."""
+    pdf_bytes = sess["pdf_bytes"]
+    if sess["is_image"]:
+        try:
+            doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+            base_name, file_ext = os.path.splitext(sess["original_filename"])
+            is_jpeg = file_ext.lower() in [".jpg", ".jpeg", ".jfif"]
+            out_name = f"{base_name}_clean{file_ext}"
+            mime = "image/jpeg" if is_jpeg else "image/png"
+            pix = doc[0].get_pixmap(dpi=300)
+            img_data = pix.tobytes("jpeg" if is_jpeg else "png")
+            doc.close()
+            return {
+                "status": "success",
+                "pdf_base64": base64.b64encode(img_data).decode("ascii"),
+                "filename": out_name,
+                "mime_type": mime,
+                "is_image": True,
+            }
+        except Exception as ex:
+            print(f"Image export notice: {ex}")
+
+    if compress:
+        doc = pymupdf.open(stream=pdf_bytes, filetype="pdf")
+        out_buf = io.BytesIO()
+        doc.save(out_buf, garbage=4, deflate=True)
+        export_bytes = out_buf.getvalue()
+        doc.close()
+    else:
+        export_bytes = pdf_bytes
+
+    return {
+        "status": "success",
+        "pdf_base64": base64.b64encode(export_bytes).decode("ascii"),
+        "filename": "edited_clean.pdf",
+        "mime_type": "application/pdf",
+    }
+
+
 class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        global ACTIVE_PDF_BYTES, ACTIVE_ORIGINAL_FILENAME, ACTIVE_IS_IMAGE
+    def _session(self):
         url = urllib.parse.urlparse(self.path)
-        
+        params = urllib.parse.parse_qs(url.query)
+        sid = self.headers.get("X-Session-Id") or (params.get("session_id", [None])[0]) or "default"
+        return get_session(sid)
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Session-Id")
+        self.end_headers()
+
+    def do_GET(self):
+        url = urllib.parse.urlparse(self.path)
+
+        if url.path == "/health":
+            self.send_json({"status": "ok"})
+            return
+
         if url.path == "/" or url.path == "/index.html":
             self.send_response(200)
             self.send_header("Content-type", "text/html; charset=utf-8")
@@ -468,69 +583,43 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         if url.path == "/api/sample":
-            if ACTIVE_PDF_BYTES is None:
+            sess = self._session()
+            if sess["pdf_bytes"] is None:
                 self.send_error(404, "No PDF loaded")
                 return
-            data = get_page_payload(ACTIVE_PDF_BYTES, 0)
-            self.send_json(data)
+            self.send_json(render_session_page(sess, 0))
             return
 
         if url.path == "/api/page":
+            sess = self._session()
             params = urllib.parse.parse_qs(url.query)
             p_idx = int(params.get("num", [0])[0])
-            if ACTIVE_PDF_BYTES is None:
+            if sess["pdf_bytes"] is None:
                 self.send_error(404, "No PDF loaded")
                 return
-            data = get_page_payload(ACTIVE_PDF_BYTES, p_idx)
-            self.send_json(data)
+            self.send_json(render_session_page(sess, p_idx))
             return
 
         if url.path == "/api/export":
-            if ACTIVE_PDF_BYTES is None:
+            sess = self._session()
+            if sess["pdf_bytes"] is None:
                 self.send_json({"status": "error", "message": "No document active"}, status=400)
                 return
-
-            # If original upload was an image, render and export the edited composite image directly at 300 DPI
-            if ACTIVE_IS_IMAGE:
-                try:
-                    doc = pymupdf.open(stream=ACTIVE_PDF_BYTES, filetype="pdf")
-                    base_name, file_ext = os.path.splitext(ACTIVE_ORIGINAL_FILENAME)
-                    is_jpeg = file_ext.lower() in [".jpg", ".jpeg", ".jfif"]
-                    out_name = f"{base_name}_clean{file_ext}"
-                    pix = doc[0].get_pixmap(dpi=300)
-                    img_data = pix.tobytes("jpeg" if is_jpeg else "png")
-                    doc.close()
-                    b64_img = base64.b64encode(img_data).decode("ascii")
-                    self.send_json({
-                        "status": "success",
-                        "pdf_base64": b64_img,
-                        "filename": out_name,
-                        "is_image": True
-                    })
-                    return
-                except Exception as ex:
-                    print(f"Image export notice: {ex}")
-
-            b64_res = base64.b64encode(ACTIVE_PDF_BYTES).decode("ascii")
-            self.send_json({
-                "status": "success",
-                "pdf_base64": b64_res,
-                "filename": "edited_clean.pdf"
-            })
+            self.send_json(_build_export_payload(sess, compress=False))
             return
 
         return super().do_GET()
 
     def do_POST(self):
-        global ACTIVE_PDF_BYTES, HISTORY, HISTORY_INDEX, ACTIVE_ORIGINAL_FILENAME, ACTIVE_IS_IMAGE, PAGE_OCR_CACHE
+        sess = self._session()
         url = urllib.parse.urlparse(self.path)
 
         if url.path == "/api/upload":
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
-            
+
             try:
-                PAGE_OCR_CACHE.clear()
+                sess["ocr_cache"].clear()
                 req = json.loads(body.decode("utf-8"))
                 b64_data = req.get("pdf_base64", "")
                 filename = req.get("filename", "document.pdf")
@@ -542,8 +631,8 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
                 ext = os.path.splitext(filename)[1].lower() if filename else ".pdf"
                 image_extensions = ('.png', '.jpg', '.jpeg', '.jfif', '.webp', '.tiff', '.tif', '.bmp')
                 is_image = ext in image_extensions or uploaded_bytes.startswith((b'\x89PNG', b'\xff\xd8\xff', b'RIFF', b'II*\x00', b'MM\x00*'))
-                ACTIVE_ORIGINAL_FILENAME = filename
-                ACTIVE_IS_IMAGE = bool(is_image)
+                sess["original_filename"] = filename
+                sess["is_image"] = bool(is_image)
 
                 if not uploaded_bytes.startswith(b"%PDF") and is_image:
                     try:
@@ -557,24 +646,24 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
                 is_pdf = uploaded_bytes.startswith(b"%PDF") or ext == ".pdf"
 
                 if is_pdf:
-                    ACTIVE_PDF_BYTES = uploaded_bytes
-                    HISTORY = [ACTIVE_PDF_BYTES]
-                    HISTORY_INDEX = 0
-                    data = get_page_payload(ACTIVE_PDF_BYTES, 0)
+                    sess["pdf_bytes"] = uploaded_bytes
+                    sess["history"] = [uploaded_bytes]
+                    sess["history_index"] = 0
+                    data = render_session_page(sess, 0)
                     self.send_json({"status": "success", "file_type": "pdf", "data": data})
 
                     # If multi-page scanned document, pre-OCR subsequent pages in background so page navigation is instant
                     if data.get("is_scanned") and data.get("total_pages", 1) > 1:
-                        def _bg_pre_ocr(pdf_data, num_pages):
+                        def _bg_pre_ocr(pdf_data, num_pages, cache_ref):
                             try:
                                 d = pymupdf.open(stream=pdf_data, filetype="pdf")
                                 for p_i in range(1, min(num_pages, 8)):
-                                    if p_i not in PAGE_OCR_CACHE:
-                                        extract_ocr_text_data(d[p_i], p_i)
+                                    if p_i not in cache_ref:
+                                        extract_ocr_text_data(d[p_i], p_i, ocr_cache=cache_ref)
                                 d.close()
                             except Exception:
                                 pass
-                        threading.Thread(target=_bg_pre_ocr, args=(ACTIVE_PDF_BYTES, data["total_pages"]), daemon=True).start()
+                        threading.Thread(target=_bg_pre_ocr, args=(uploaded_bytes, data["total_pages"], sess["ocr_cache"]), daemon=True).start()
                 else:
                     # Direct sanitization for DOCX, PPTX, XLSX, Images
                     clean_bytes, audit = UniversalSanitizer.sanitize_bytes(uploaded_bytes, filename=filename)
@@ -592,13 +681,12 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json({"status": "error", "message": str(e)}, status=400)
             return
 
-
         if url.path == "/api/sanitize":
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length)
             try:
                 req = json.loads(body.decode("utf-8")) if body else {}
-                if ACTIVE_PDF_BYTES is None:
+                if sess["pdf_bytes"] is None:
                     self.send_json({"status": "error", "message": "No active PDF"}, status=400)
                     return
 
@@ -612,7 +700,7 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
                 keywords = req.get("keywords", None)
 
                 clean_bytes, audit = UniversalSanitizer.sanitize_bytes(
-                    ACTIVE_PDF_BYTES,
+                    sess["pdf_bytes"],
                     filename="document.pdf",
                     remove_text=remove_text,
                     remove_annots=remove_annots,
@@ -623,17 +711,10 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
                     keywords=keywords
                 )
 
-                PAGE_OCR_CACHE.clear()
-                ACTIVE_PDF_BYTES = clean_bytes
+                sess["ocr_cache"].clear()
+                push_history(sess, clean_bytes)
 
-                # Record in Undo History
-                HISTORY = HISTORY[:HISTORY_INDEX + 1]
-                HISTORY.append(ACTIVE_PDF_BYTES)
-                if len(HISTORY) > MAX_HISTORY:
-                    HISTORY.pop(0)
-                HISTORY_INDEX = len(HISTORY) - 1
-
-                new_data = get_page_payload(ACTIVE_PDF_BYTES, p_idx)
+                new_data = render_session_page(sess, p_idx)
                 self.send_json({
                     "status": "success",
                     "audit": audit,
@@ -645,11 +726,11 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
 
         if url.path == "/api/detect_watermarks":
             try:
-                if ACTIVE_PDF_BYTES is None:
+                if sess["pdf_bytes"] is None:
                     self.send_json({"status": "error", "message": "No active PDF"}, status=400)
                     return
 
-                doc = pymupdf.open(stream=ACTIVE_PDF_BYTES, filetype="pdf")
+                doc = pymupdf.open(stream=sess["pdf_bytes"], filetype="pdf")
                 total_pages = len(doc)
                 found_indicators = {
                     "marked_content_stamps": 0,
@@ -709,11 +790,11 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
 
             try:
                 edit = json.loads(body.decode("utf-8"))
-                if ACTIVE_PDF_BYTES is None:
+                if sess["pdf_bytes"] is None:
                     self.send_json({"status": "error", "message": "No active PDF"}, status=400)
                     return
 
-                doc = pymupdf.open(stream=ACTIVE_PDF_BYTES, filetype="pdf")
+                doc = pymupdf.open(stream=sess["pdf_bytes"], filetype="pdf")
                 p_idx = edit.get("page_index", 0)
 
                 # Apply universal edit
@@ -721,18 +802,13 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
 
                 out_buf = io.BytesIO()
                 doc.save(out_buf, garbage=2, deflate=True)
-                ACTIVE_PDF_BYTES = out_buf.getvalue()
+                new_pdf_bytes = out_buf.getvalue()
                 doc.close()
 
-                # Record in Undo History
-                HISTORY = HISTORY[:HISTORY_INDEX + 1]
-                HISTORY.append(ACTIVE_PDF_BYTES)
-                if len(HISTORY) > MAX_HISTORY:
-                    HISTORY.pop(0)
-                HISTORY_INDEX = len(HISTORY) - 1
+                push_history(sess, new_pdf_bytes)
 
                 # Re-render immediately
-                new_data = get_page_payload(ACTIVE_PDF_BYTES, p_idx)
+                new_data = render_session_page(sess, p_idx)
                 self.send_json({"status": "success", "data": new_data})
 
             except Exception as e:
@@ -745,11 +821,11 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
             try:
                 req = json.loads(body.decode("utf-8"))
                 query = req.get("query", "").strip()
-                if not query or ACTIVE_PDF_BYTES is None:
+                if not query or sess["pdf_bytes"] is None:
                     self.send_json({"total_matches": 0, "results": []})
                     return
 
-                doc = pymupdf.open(stream=ACTIVE_PDF_BYTES, filetype="pdf")
+                doc = pymupdf.open(stream=sess["pdf_bytes"], filetype="pdf")
                 results = []
                 total_matches = 0
 
@@ -758,7 +834,7 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
                     rects = page.search_for(query)
                     if not rects:
                         # Fallback for scanned / photo documents: search extracted OCR items
-                        ocr_w, _, _ = extract_ocr_text_data(page, p_idx)
+                        ocr_w, _, _ = extract_ocr_text_data(page, p_idx, ocr_cache=sess["ocr_cache"])
                         q_lower = query.lower()
                         for item in ocr_w:
                             if q_lower in item.get("text", "").lower():
@@ -795,11 +871,11 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
                 target_page = req.get("page_index", 0)
                 reflow = req.get("reflow", True)
 
-                if not search_text or ACTIVE_PDF_BYTES is None:
+                if not search_text or sess["pdf_bytes"] is None:
                     self.send_json({"status": "error", "message": "Search text required"}, status=400)
                     return
 
-                doc = pymupdf.open(stream=ACTIVE_PDF_BYTES, filetype="pdf")
+                doc = pymupdf.open(stream=sess["pdf_bytes"], filetype="pdf")
                 total_replaced = 0
                 pages_affected = 0
                 pages_to_process = range(len(doc)) if all_pages else [target_page]
@@ -811,7 +887,7 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
                     rects = page.search_for(search_text)
                     ocr_w = []
                     if not rects:
-                        ocr_w, _, _ = extract_ocr_text_data(page, p_idx)
+                        ocr_w, _, _ = extract_ocr_text_data(page, p_idx, ocr_cache=sess["ocr_cache"])
                         s_lower = search_text.lower()
                         for item in ocr_w:
                             if s_lower in item.get("text", "").lower():
@@ -863,16 +939,12 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
 
                 out_buf = io.BytesIO()
                 doc.save(out_buf, garbage=2, deflate=True)
-                ACTIVE_PDF_BYTES = out_buf.getvalue()
+                new_pdf_bytes = out_buf.getvalue()
                 doc.close()
 
-                HISTORY = HISTORY[:HISTORY_INDEX + 1]
-                HISTORY.append(ACTIVE_PDF_BYTES)
-                if len(HISTORY) > MAX_HISTORY:
-                    HISTORY.pop(0)
-                HISTORY_INDEX = len(HISTORY) - 1
+                push_history(sess, new_pdf_bytes)
 
-                new_data = get_page_payload(ACTIVE_PDF_BYTES, target_page)
+                new_data = render_session_page(sess, target_page)
                 self.send_json({
                     "status": "success",
                     "total_replaced": total_replaced,
@@ -883,7 +955,8 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_json({"status": "error", "message": str(e)}, status=500)
             return
 
-        if url.path == "/api/undo":
+        if url.path in ("/api/undo", "/api/redo"):
+            delta = -1 if url.path == "/api/undo" else 1
             content_length = int(self.headers.get("Content-Length", 0))
             body = self.rfile.read(content_length) if content_length > 0 else b"{}"
             p_idx = 0
@@ -893,77 +966,22 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
             except Exception:
                 pass
 
-            if HISTORY_INDEX > 0:
-                HISTORY_INDEX -= 1
-                ACTIVE_PDF_BYTES = HISTORY[HISTORY_INDEX]
-                data = get_page_payload(ACTIVE_PDF_BYTES, p_idx)
-                self.send_json({"status": "success", "data": data})
+            new_idx = sess["history_index"] + delta
+            if 0 <= new_idx < len(sess["history"]):
+                with SESSION_LOCK:
+                    sess["history_index"] = new_idx
+                    sess["pdf_bytes"] = sess["history"][new_idx]
+                self.send_json({"status": "success", "data": render_session_page(sess, p_idx)})
             else:
-                self.send_json({"status": "error", "message": "Nothing to undo"}, status=400)
-            return
-
-        if url.path == "/api/redo":
-            content_length = int(self.headers.get("Content-Length", 0))
-            body = self.rfile.read(content_length) if content_length > 0 else b"{}"
-            p_idx = 0
-            try:
-                req = json.loads(body.decode("utf-8")) if body else {}
-                p_idx = req.get("page_index", 0)
-            except Exception:
-                pass
-
-            if HISTORY_INDEX < len(HISTORY) - 1:
-                HISTORY_INDEX += 1
-                ACTIVE_PDF_BYTES = HISTORY[HISTORY_INDEX]
-                data = get_page_payload(ACTIVE_PDF_BYTES, p_idx)
-                self.send_json({"status": "success", "data": data})
-            else:
-                self.send_json({"status": "error", "message": "Nothing to redo"}, status=400)
+                msg = "Nothing to undo" if delta < 0 else "Nothing to redo"
+                self.send_json({"status": "error", "message": msg}, status=400)
             return
 
         if url.path == "/api/export":
-            if ACTIVE_PDF_BYTES is None:
+            if sess["pdf_bytes"] is None:
                 self.send_json({"status": "error", "message": "No document active"}, status=400)
                 return
-
-            # If the active document was loaded from an image, export clean composite image directly at 300 DPI
-            if ACTIVE_IS_IMAGE:
-                try:
-                    doc = pymupdf.open(stream=ACTIVE_PDF_BYTES, filetype="pdf")
-                    base_name, file_ext = os.path.splitext(ACTIVE_ORIGINAL_FILENAME)
-                    is_jpeg = file_ext.lower() in [".jpg", ".jpeg", ".jfif"]
-                    out_name = f"{base_name}_clean{file_ext}"
-                    mime = "image/jpeg" if is_jpeg else "image/png"
-                    pix = doc[0].get_pixmap(dpi=300)
-                    img_data = pix.tobytes("jpeg" if is_jpeg else "png")
-                    doc.close()
-                    b64_img = base64.b64encode(img_data).decode("ascii")
-                    self.send_json({
-                        "status": "success",
-                        "pdf_base64": b64_img,
-                        "filename": out_name,
-                        "mime_type": mime,
-                        "is_image": True
-                    })
-                    return
-                    doc.close()
-                except Exception as ex:
-                    print(f"Image export notice: {ex}")
-
-            # Clean and compress for export
-            doc = pymupdf.open(stream=ACTIVE_PDF_BYTES, filetype="pdf")
-            out_buf = io.BytesIO()
-            doc.save(out_buf, garbage=4, deflate=True)
-            export_bytes = out_buf.getvalue()
-            doc.close()
-
-            b64_res = base64.b64encode(export_bytes).decode("ascii")
-            self.send_json({
-                "status": "success",
-                "pdf_base64": b64_res,
-                "filename": "edited_clean.pdf",
-                "mime_type": "application/pdf"
-            })
+            self.send_json(_build_export_payload(sess, compress=True))
             return
 
         self.send_error(404, "Endpoint not found")
@@ -974,12 +992,13 @@ class PDFEditorHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, X-Session-Id")
         self.end_headers()
         self.wfile.write(body)
 
 if __name__ == "__main__":
     os.chdir(WEB_DIR)
     http.server.ThreadingHTTPServer.allow_reuse_address = True
-    with http.server.ThreadingHTTPServer(("", PORT), PDFEditorHandler) as httpd:
-        print(f"[*] GhostPDF Universal Studio Running at: http://localhost:{PORT}")
+    with http.server.ThreadingHTTPServer(("0.0.0.0", PORT), PDFEditorHandler) as httpd:
+        print(f"[*] GhostPDF Universal Studio Running at: http://0.0.0.0:{PORT}")
         httpd.serve_forever()
